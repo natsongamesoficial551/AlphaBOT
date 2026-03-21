@@ -13,21 +13,23 @@ async function handleButton(interaction) {
   // ── COMPRAR PACOTE COIN ────────────────────────────────
   if (customId.startsWith('btn_coin_')) {
     const pacote = parseInt(customId.replace('btn_coin_', ''));
-    const precos = { 100: '5,00', 300: '10,00', 750: '20,00', 2000: '50,00' };
+    const precos = { 100: '13,00', 250: '30,00', 500: '58,00', 1000: '112,00' };
     if (!precos[pacote]) return interaction.reply({ embeds: [embedErro('Pacote inválido.')], flags: MessageFlags.Ephemeral });
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    // Salva pedido de coin no DB como pedido especial
     const pedidoId = db.criarPedido(0, `COIN-${pacote}`, user.id, user.username);
 
+    const embedPix = embedPIXCoin(pacote, pedidoId);
+    if (!embedPix) return interaction.editReply({ embeds: [embedErro('Erro ao gerar embed de pagamento.')] });
+
     try {
-      await user.send({ embeds: [embedPIXCoin(pacote, pedidoId)] });
+      await user.send({ embeds: [embedPix] });
       await interaction.editReply({ embeds: [{ color: 0x27AE60, description: `✅ Instruções de pagamento enviadas na sua **DM**!\nPedido: \`#coin-${pedidoId}\`` }] });
     } catch {
       await interaction.editReply({ embeds: [embedErro('Não consegui enviar DM. Habilite mensagens diretas.')] });
     }
-    _log(guild, 'compra', `<@${user.id}> solicitou ${pacote} XIT Coins (Pedido coin #${pedidoId})`, user.id);
+    _log(guild, 'compra', `<@${user.id}> solicitou ${pacote} 🪙 XIT Coins (Pedido #coin-${pedidoId})`, user.id);
     return;
   }
 

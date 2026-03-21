@@ -116,38 +116,21 @@ function embedProduto(produto) {
     .setColor(COR.produto)
     .setTitle(`🛒 ${produto.nome}`)
     .setDescription(produto.descricao || 'Sem descrição.')
+    .addFields(
+      { name: '🪙 Preço', value: `**${produto.preco_coins} XIT Coins**`, inline: true },
+      { name: '🆔 ID', value: `\`#${produto.id}\``, inline: true },
+    )
     .setTimestamp()
     .setFooter(FOOTER);
 
-  // Preço PIX
-  embed.addFields({ name: '💰 Preço PIX', value: `**R$ ${produto.preco}**`, inline: true });
-
-  // Preço em coins (se configurado)
-  if (produto.preco_coins && produto.preco_coins > 0) {
-    embed.addFields({ name: '🪙 Preço em XIT Coin', value: `**${produto.preco_coins} 🪙**`, inline: true });
-  }
-
-  embed.addFields({ name: '🆔 ID', value: `\`#${produto.id}\``, inline: true });
-
   if (produto.link) embed.addFields({ name: '🔗 Mais informações', value: produto.link, inline: false });
 
-  const btns = [
+  const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(`btn_comprar_${produto.id}`)
-      .setLabel('💳 Comprar via PIX')
-      .setStyle(ButtonStyle.Success),
-  ];
-
-  if (produto.preco_coins && produto.preco_coins > 0) {
-    btns.push(
-      new ButtonBuilder()
-        .setCustomId(`btn_comprar_coin_${produto.id}`)
-        .setLabel(`🪙 Comprar com ${produto.preco_coins} Coins`)
-        .setStyle(ButtonStyle.Primary)
-    );
-  }
-
-  const row = new ActionRowBuilder().addComponents(...btns);
+      .setCustomId(`btn_comprar_coin_${produto.id}`)
+      .setLabel(`🪙 Comprar com ${produto.preco_coins} Coins`)
+      .setStyle(ButtonStyle.Success)
+  );
   return { embed, row };
 }
 
@@ -377,42 +360,64 @@ function embedExtrato(member, transacoes) {
   return embed;
 }
 
-function embedPacotesMoeda() {
+// Pacotes definidos centralizados — fácil de atualizar
+const PACOTES = {
+  100  : { coins: 100,  preco: '13,00', label: '100 🪙  — R$ 13' },
+  250  : { coins: 250,  preco: '30,00', label: '250 🪙  — R$ 30' },
+  500  : { coins: 500,  preco: '58,00', label: '500 🪙  — R$ 58' },
+  1000 : { coins: 1000, preco: '112,00', label: '1000 🪙 — R$ 112' },
+};
+
+function embedLojaCoins() {
   const embed = new EmbedBuilder()
     .setColor(0xF1C40F)
-    .setTitle('🪙 Comprar XIT Coins')
-    .setDescription('Escolha um pacote abaixo, pague via PIX e aguarde a confirmação da equipe!')
+    .setTitle('🪙 Loja de XIT Coins')
+    .setDescription(
+      '> Use XIT Coins para comprar produtos exclusivos da loja!\n\n' +
+      '**Como funciona:**\n' +
+      '1. Escolha um pacote abaixo\n' +
+      '2. Receba as instruções de pagamento na sua **DM**\n' +
+      '3. Pague via PIX e envie o comprovante para um @🛡️ ꜱᴛᴀꜰꜰ\n' +
+      '4. Suas moedas serão creditadas automaticamente! ✅'
+    )
     .addFields(
-      { name: '📦 Pacote Starter',  value: '**100 🪙** por **R$ 5,00**',  inline: true },
-      { name: '📦 Pacote Plus',     value: '**300 🪙** por **R$ 10,00**', inline: true },
-      { name: '📦 Pacote Pro',      value: '**750 🪙** por **R$ 20,00**', inline: true },
-      { name: '📦 Pacote Elite',    value: '**2000 🪙** por **R$ 50,00**', inline: true },
+      { name: '📦 Starter',  value: '**100 🪙**\nR$ 13,00',  inline: true },
+      { name: '📦 Plus',     value: '**250 🪙**\nR$ 30,00',  inline: true },
+      { name: '📦 Pro',      value: '**500 🪙**\nR$ 58,00',  inline: true },
+      { name: '📦 Elite',    value: '**1000 🪙**\nR$ 112,00', inline: true },
+      { name: '\u200b',      value: '\u200b',                 inline: true },
+      { name: '💡 Dica',     value: '250 🪙 = 1 produto padrão da loja', inline: true },
     )
     .setTimestamp()
     .setFooter(FOOTER);
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('btn_coin_100').setLabel('100 🪙 — R$5').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('btn_coin_300').setLabel('300 🪙 — R$10').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('btn_coin_750').setLabel('750 🪙 — R$20').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('btn_coin_2000').setLabel('2000 🪙 — R$50').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('btn_coin_100').setLabel('100 🪙 — R$13').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('btn_coin_250').setLabel('250 🪙 — R$30').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('btn_coin_500').setLabel('500 🪙 — R$58').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('btn_coin_1000').setLabel('1000 🪙 — R$112').setStyle(ButtonStyle.Success),
   );
   return { embed, row };
 }
 
+function embedPacotesMoeda() {
+  return embedLojaCoins();
+}
+
 function embedPIXCoin(pacote, pedidoId) {
-  const precos = { 100: '5,00', 300: '10,00', 750: '20,00', 2000: '50,00' };
+  const p = PACOTES[pacote];
+  if (!p) return null;
   return new EmbedBuilder()
     .setColor(0x27AE60)
     .setTitle('💳 Pagamento via PIX — XIT Coins')
-    .setDescription(`Você escolheu o pacote de **${pacote} 🪙 XIT Coins**.\n\nRealize o pagamento e aguarde a confirmação!`)
+    .setDescription(`Você escolheu o pacote de **${p.coins} 🪙 XIT Coins**.\n\nRealize o pagamento e aguarde a confirmação!`)
     .addFields(
-      { name: '🪙 Moedas', value: `**${pacote} XIT Coins**`, inline: true },
-      { name: '💰 Valor', value: `**R$ ${precos[pacote]}**`, inline: true },
-      { name: '🆔 Pedido', value: `\`#coin-${pedidoId}\``, inline: true },
-      { name: '🔑 Chave PIX', value: `\`${process.env.PIX_KEY || 'Contate um staff'}\``, inline: false },
-      { name: '👤 Favorecido', value: process.env.PIX_NAME || 'Alpha Xit', inline: false },
-      { name: '📋 Próximo passo', value: 'Envie o comprovante para um **@🛡️ ꜱᴛᴀꜰꜰ** após o pagamento.', inline: false },
+      { name: '🪙 Moedas',     value: `**${p.coins} XIT Coins**`,                          inline: true },
+      { name: '💰 Valor',      value: `**R$ ${p.preco}**`,                                  inline: true },
+      { name: '🆔 Pedido',     value: `\`#coin-${pedidoId}\``,                              inline: true },
+      { name: '🔑 Chave PIX',  value: `\`${process.env.PIX_KEY || 'Contate um staff'}\``,  inline: false },
+      { name: '👤 Favorecido', value: process.env.PIX_NAME || 'Alpha Xit',                 inline: false },
+      { name: '📋 Próximo passo', value: 'Envie o comprovante para um **@🛡️ ꜱᴛᴀꜰꜰ** e aguarde a confirmação!', inline: false },
     )
     .setTimestamp()
     .setFooter({ text: `⚡ Alpha Xit • Pedido Coin #${pedidoId}` });
@@ -449,5 +454,5 @@ module.exports = {
   embedPIX, embedPedidoConfirmado, embedEntregaProduto,
   embedNovoVideo,
   embedPedidosAbertos, embedLog, embedErro, embedSucesso,
-  embedSaldo, embedExtrato, embedPacotesMoeda, embedPIXCoin, embedCoinRecebido, embedSaldoInsuficiente,
+  embedSaldo, embedExtrato, embedLojaCoins, embedPacotesMoeda, embedPIXCoin, embedCoinRecebido, embedSaldoInsuficiente,
 };

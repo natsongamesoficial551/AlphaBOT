@@ -13,9 +13,8 @@ const commands = [
     .setDescription('Adiciona um produto pago à loja')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
     .addStringOption(o => o.setName('nome').setDescription('Nome do produto').setRequired(true))
-    .addStringOption(o => o.setName('preco').setDescription('Preço em R$ (ex: 19.90)').setRequired(true))
+    .addIntegerOption(o => o.setName('preco_coins').setDescription('Preço em XIT Coins (ex: 250)').setRequired(true))
     .addStringOption(o => o.setName('descricao').setDescription('Descrição do produto').setRequired(true))
-    .addIntegerOption(o => o.setName('preco_coins').setDescription('Preço em XIT Coins (0 = não aceita coins)').setRequired(false))
     .addStringOption(o => o.setName('link').setDescription('Link de entrega do produto').setRequired(false)),
 
   new SlashCommandBuilder()
@@ -135,12 +134,11 @@ async function handleCommand(interaction) {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
       const nome       = interaction.options.getString('nome');
-      const preco      = interaction.options.getString('preco');
+      const precoCoins = interaction.options.getInteger('preco_coins');
       const descricao  = interaction.options.getString('descricao');
-      const precoCoins = interaction.options.getInteger('preco_coins') || 0;
       const link       = interaction.options.getString('link') || '';
 
-      const produto = db.addProduto(nome, descricao, preco, precoCoins, link, '', 'pago', 'pago');
+      const produto = db.addProduto(nome, descricao, 'coins', precoCoins, link, '', 'pago', 'pago');
       if (!produto) return interaction.editReply({ embeds: [embedErro('Erro ao salvar produto no banco.')] });
 
       const canal = guild.channels.cache.get(CANAL_PAGO_ID);
@@ -231,6 +229,10 @@ async function handleCommand(interaction) {
       // Pedido de COIN — credita moedas automaticamente
       if (pedido.produto_nome?.startsWith('COIN-')) {
         const quantidade = parseInt(pedido.produto_nome.replace('COIN-', ''));
+        const validos = [100, 250, 500, 1000];
+        if (!validos.includes(quantidade)) {
+          return interaction.editReply({ embeds: [embedErro(`Pacote de coin inválido: ${quantidade}`)] });
+        }
         db.adicionarSaldo(pedido.comprador_id, quantidade, `Compra de pacote via PIX (Pedido #${pedidoId})`);
         const novoSaldo = db.getSaldo(pedido.comprador_id);
 

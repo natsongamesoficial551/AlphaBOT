@@ -1,17 +1,18 @@
 const { getMsgFixa, saveMsgFixa, deleteMsgFixa } = require('./database');
 const {
   embedBoasVindas, embedRegras, embedRegistro,
-  embedXitFree, embedComoComprar,
+  embedXitFree, embedComoComprar, embedLojaCoins,
 } = require('./embeds');
 
-// Nomes dos canais definidos no template do setup-bot
 const CANAL_NOMES = {
-  'boas-vindas'   : '👋・boas-vindas',
-  'regras'        : '📜・regras',
-  'registro'      : '✅・registro',
-  'xit-free'      : '🆓・xit-free',
-  'como-comprar'  : '🛒・como-comprar',
+  'boas-vindas'  : '👋・boas-vindas',
+  'regras'       : '📜・regras',
+  'registro'     : '✅・registro',
+  'xit-free'     : '🆓・xit-free',
+  'como-comprar' : '🛒・como-comprar',
 };
+
+const CANAL_LOJA_COINS_ID = '1484718875450015754';
 
 async function findChannel(guild, nome) {
   return guild.channels.cache.find(c => c.name === nome) || null;
@@ -61,7 +62,43 @@ async function seedTodosCanais(guild) {
   await seedCanal(guild, 'xit-free',     CANAL_NOMES['xit-free'],     () => embedXitFree());
   await seedCanal(guild, 'como-comprar', CANAL_NOMES['como-comprar'], () => embedComoComprar());
 
+  // Loja de Coins — seed por ID fixo do canal
+  await seedCanalById(guild, 'loja-coins', CANAL_LOJA_COINS_ID, () => embedLojaCoins());
+
   console.log(`[SEED] ✅ Seed concluído!`);
+}
+
+async function seedCanalById(guild, tipo, canalId, buildFn) {
+  const canal = guild.channels.cache.get(canalId);
+  if (!canal) {
+    console.warn(`[SEED] ⚠️ Canal ID ${canalId} (${tipo}) não encontrado.`);
+    return;
+  }
+
+  const existing = getMsgFixa(guild.id, tipo);
+  if (existing) {
+    try {
+      await canal.messages.fetch(existing.message_id);
+      console.log(`[SEED] ✓ ${tipo} já existe — skip`);
+      return;
+    } catch {
+      deleteMsgFixa(guild.id, tipo);
+      console.log(`[SEED] ↻ ${tipo} sumiu, reenviando...`);
+    }
+  }
+
+  const payload = buildFn();
+  let msg;
+  if (payload.embed && payload.row) {
+    msg = await canal.send({ embeds: [payload.embed], components: [payload.row] });
+  } else if (payload.embed) {
+    msg = await canal.send({ embeds: [payload.embed] });
+  } else {
+    msg = await canal.send({ embeds: [payload] });
+  }
+
+  saveMsgFixa(guild.id, canal.id, tipo, msg.id);
+  console.log(`[SEED] ✅ ${tipo} enviado no canal ${canalId}`);
 }
 
 module.exports = { seedTodosCanais };
