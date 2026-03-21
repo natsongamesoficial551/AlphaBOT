@@ -50,6 +50,7 @@ function _createTables() {
     descricao   TEXT,
     tipo        TEXT DEFAULT 'pago',
     preco       TEXT,
+    preco_coins INTEGER DEFAULT 0,
     link        TEXT,
     imagem_url  TEXT,
     categoria   TEXT DEFAULT 'geral',
@@ -57,6 +58,22 @@ function _createTables() {
     message_id  TEXT,
     canal_id    TEXT,
     criado_em   TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS carteiras (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    discord_id    TEXT UNIQUE NOT NULL,
+    saldo         INTEGER DEFAULT 0,
+    atualizado_em TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS transacoes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    discord_id TEXT NOT NULL,
+    tipo       TEXT NOT NULL,
+    quantidade INTEGER NOT NULL,
+    descricao  TEXT,
+    criado_em  TEXT DEFAULT (datetime('now','localtime'))
   )`);
 
   db.run(`CREATE TABLE IF NOT EXISTS pedidos (
@@ -94,12 +111,13 @@ function _createTables() {
 function _migrate() {
   // Adiciona colunas novas em tabelas existentes sem apagar dados
   const migrations = [
-    { table: 'produtos',  column: 'tipo',      def: `TEXT DEFAULT 'pago'` },
-    { table: 'produtos',  column: 'imagem_url', def: `TEXT` },
-    { table: 'produtos',  column: 'categoria',  def: `TEXT DEFAULT 'geral'` },
-    { table: 'produtos',  column: 'message_id', def: `TEXT` },
-    { table: 'produtos',  column: 'canal_id',   def: `TEXT` },
-    { table: 'membros',   column: 'xit_id',     def: `TEXT` },
+    { table: 'produtos',  column: 'tipo',        def: `TEXT DEFAULT 'pago'` },
+    { table: 'produtos',  column: 'preco_coins',  def: `INTEGER DEFAULT 0` },
+    { table: 'produtos',  column: 'imagem_url',   def: `TEXT` },
+    { table: 'produtos',  column: 'categoria',    def: `TEXT DEFAULT 'geral'` },
+    { table: 'produtos',  column: 'message_id',   def: `TEXT` },
+    { table: 'produtos',  column: 'canal_id',     def: `TEXT` },
+    { table: 'membros',   column: 'xit_id',       def: `TEXT` },
   ];
 
   for (const m of migrations) {
@@ -168,15 +186,50 @@ function totalMembros() {
 }
 
 // ── Produtos ─────────────────────────────────────────────
-function addProduto(nome, descricao, preco, link, imagemUrl, categoria, tipo = 'pago') {
+function addProduto(nome, descricao, preco, precoCoins, link, imagemUrl, categoria, tipo = 'pago') {
   db.run(
-    `INSERT INTO produtos (nome,descricao,tipo,preco,link,imagem_url,categoria) VALUES (?,?,?,?,?,?,?)`,
-    [nome, descricao, tipo, preco || 'Grátis', link || '', imagemUrl || '', categoria || 'geral']
+    `INSERT INTO produtos (nome,descricao,tipo,preco,preco_coins,link,imagem_url,categoria) VALUES (?,?,?,?,?,?,?,?)`,
+    [nome, descricao, tipo, preco || 'Grátis', precoCoins || 0, link || '', imagemUrl || '', categoria || 'geral']
   );
-  // sql.js: pega o rowid direto da instância do db
   const rowid = db.exec('SELECT last_insert_rowid()')[0].values[0][0];
   _save();
   return get(`SELECT * FROM produtos WHERE id=?`, [rowid]);
+}
+
+// ── Carteiras ─────────────────────────────────────────────
+function getCarteira(discordId) {
+  let carteira = get(`SELECT * FROM carteiras WHERE discord_id=?`, [discordId]);
+  if (!carteira) {
+    run(`INSERT OR IGNORE INTO carteiras (discord_id, saldo) VALUES (?,0)`, [discordId]);
+    carteira = get(`SELECT * FROM carteiras WHERE discord_id=?`, [discordId]);
+  }
+  return carteira;
+}
+
+function getSaldo(discordId) {
+  return getCarteira(discordId)?.saldo || 0;
+}
+
+function adicionarSaldo(discordId, quantidade, descricao = 'Crédito') {
+  run(`INSERT INTO carteiras (discord_id, saldo) VALUES (?,?)
+       ON CONFLICT(discord_id) DO UPDATE SET saldo=saldo+?, atualizado_em=datetime('now','localtime')`,
+    [discordId, quantidade, quantidade]);
+  run(`INSERT INTO transacoes (discord_id,tipo,quantidade,descricao) VALUES (?,?,?,?)`,
+    [discordId, 'credito', quantidade, descricao]);
+}
+
+function removerSaldo(discordId, quantidade, descricao = 'Débito') {
+  const saldo = getSaldo(discordId);
+  if (saldo < quantidade) return false;
+  run(`UPDATE carteiras SET saldo=saldo-?, atualizado_em=datetime('now','localtime') WHERE discord_id=?`,
+    [quantidade, discordId]);
+  run(`INSERT INTO transacoes (discord_id,tipo,quantidade,descricao) VALUES (?,?,?,?)`,
+    [discordId, 'debito', quantidade, descricao]);
+  return true;
+}
+
+function getExtrato(discordId, limite = 10) {
+  return query(`SELECT * FROM transacoes WHERE discord_id=? ORDER BY id DESC LIMIT ?`, [discordId, limite]);
 }
 
 function listarProdutos(tipo = null) {
@@ -250,6 +303,7 @@ module.exports = {
   registrarMembro, membroExiste, xitIdEmUso, getMembro, totalMembros,
   addProduto, listarProdutos, getProduto, deletarProduto, saveProdutoMsg,
   criarPedido, confirmarPedido, cancelarPedido, getPedidosAbertos, getPedidosByUser, getPedido,
+  getCarteira, getSaldo, adicionarSaldo, removerSaldo, getExtrato,
   getYTConfig, setYTConfig, updateUltimoVideo,
   addLog,
 };

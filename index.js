@@ -95,9 +95,24 @@ const token = process.env.DISCORD_TOKEN;
 if (!token) { console.error('❌ TOKEN VAZIO — abortando'); process.exit(1); }
 
 console.log('[LOGIN] Iniciando login...');
+
+// Timeout de 30s — se o login travar, mostra erro explícito
+const loginTimeout = setTimeout(() => {
+  console.error('[LOGIN] ❌ TIMEOUT — login não completou em 30s');
+  console.error('[LOGIN] Possíveis causas:');
+  console.error('  1. Token inválido ou com espaços/aspas extras');
+  console.error('  2. Render bloqueando WebSocket para discord.com');
+  console.error('  3. Bot desativado no Developer Portal');
+  process.exit(1);
+}, 30_000);
+
 client.login(token)
-  .then(() => console.log('[LOGIN] ✅ login() resolveu'))
+  .then(() => {
+    clearTimeout(loginTimeout);
+    console.log('[LOGIN] ✅ login() resolveu');
+  })
   .catch(err => {
+    clearTimeout(loginTimeout);
     console.error('[LOGIN] ❌ ERRO:', err.message);
     console.error('[LOGIN] Stack:', err.stack);
     process.exit(1);

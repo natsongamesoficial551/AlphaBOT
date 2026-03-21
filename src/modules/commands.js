@@ -1,6 +1,7 @@
 const { SlashCommandBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags } = require('discord.js');
 const db = require('../database');
-const { embedProduto, embedProdutoFree, embedListaProdutos, embedPedidosAbertos, embedErro, embedSucesso, embedLog, embedPedidoConfirmado, embedEntregaProduto } = require('../embeds');
+const { embedProduto, embedProdutoFree, embedListaProdutos, embedPedidosAbertos, embedErro, embedSucesso, embedLog,
+        embedPedidoConfirmado, embedEntregaProduto, embedSaldo, embedExtrato, embedCoinRecebido } = require('../embeds');
 
 const CANAL_PAGO_ID = '1484718869716140163';
 const CANAL_FREE_ID = '1484718898413703270';
@@ -12,8 +13,9 @@ const commands = [
     .setDescription('Adiciona um produto pago à loja')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
     .addStringOption(o => o.setName('nome').setDescription('Nome do produto').setRequired(true))
-    .addStringOption(o => o.setName('preco').setDescription('Preço (ex: 19.90)').setRequired(true))
+    .addStringOption(o => o.setName('preco').setDescription('Preço em R$ (ex: 19.90)').setRequired(true))
     .addStringOption(o => o.setName('descricao').setDescription('Descrição do produto').setRequired(true))
+    .addIntegerOption(o => o.setName('preco_coins').setDescription('Preço em XIT Coins (0 = não aceita coins)').setRequired(false))
     .addStringOption(o => o.setName('link').setDescription('Link de entrega do produto').setRequired(false)),
 
   new SlashCommandBuilder()
@@ -42,9 +44,44 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('confirmar')
-    .setDescription('Confirma pagamento de um pedido')
+    .setDescription('Confirma pagamento de um pedido ou pacote de coins')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
     .addIntegerOption(o => o.setName('pedido_id').setDescription('ID do pedido').setRequired(true)),
+
+  // ── Moeda ─────────────────────────────────────────────
+  new SlashCommandBuilder()
+    .setName('moeda-enviar')
+    .setDescription('Envia XIT Coins para um membro')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
+    .addUserOption(o => o.setName('usuario').setDescription('Usuário').setRequired(true))
+    .addIntegerOption(o => o.setName('quantidade').setDescription('Quantidade de coins').setRequired(true))
+    .addStringOption(o => o.setName('motivo').setDescription('Motivo (ex: Pagamento PIX #12)').setRequired(false)),
+
+  new SlashCommandBuilder()
+    .setName('moeda-remover')
+    .setDescription('Remove XIT Coins de um membro')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
+    .addUserOption(o => o.setName('usuario').setDescription('Usuário').setRequired(true))
+    .addIntegerOption(o => o.setName('quantidade').setDescription('Quantidade de coins').setRequired(true))
+    .addStringOption(o => o.setName('motivo').setDescription('Motivo').setRequired(false)),
+
+  new SlashCommandBuilder()
+    .setName('moeda-ver')
+    .setDescription('Ver saldo de XIT Coins de qualquer membro')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
+    .addUserOption(o => o.setName('usuario').setDescription('Usuário').setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName('saldo')
+    .setDescription('Ver seu saldo de XIT Coins'),
+
+  new SlashCommandBuilder()
+    .setName('extrato')
+    .setDescription('Ver seu histórico de XIT Coins'),
+
+  new SlashCommandBuilder()
+    .setName('comprar-coins')
+    .setDescription('Ver pacotes e comprar XIT Coins'),
 
   new SlashCommandBuilder()
     .setName('anuncio')
@@ -97,12 +134,13 @@ async function handleCommand(interaction) {
     if (commandName === 'produto-add') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-      const nome      = interaction.options.getString('nome');
-      const preco     = interaction.options.getString('preco');
-      const descricao = interaction.options.getString('descricao');
-      const link      = interaction.options.getString('link') || '';
+      const nome       = interaction.options.getString('nome');
+      const preco      = interaction.options.getString('preco');
+      const descricao  = interaction.options.getString('descricao');
+      const precoCoins = interaction.options.getInteger('preco_coins') || 0;
+      const link       = interaction.options.getString('link') || '';
 
-      const produto = db.addProduto(nome, descricao, preco, link, '', 'pago', 'pago');
+      const produto = db.addProduto(nome, descricao, preco, precoCoins, link, '', 'pago', 'pago');
       if (!produto) return interaction.editReply({ embeds: [embedErro('Erro ao salvar produto no banco.')] });
 
       const canal = guild.channels.cache.get(CANAL_PAGO_ID);
@@ -127,7 +165,7 @@ async function handleCommand(interaction) {
       const descricao = interaction.options.getString('descricao');
       const link      = interaction.options.getString('link') || '';
 
-      const produto = db.addProduto(nome, descricao, 'Grátis', link, '', 'free', 'free');
+      const produto = db.addProduto(nome, descricao, 'Grátis', 0, link, '', 'free', 'free');
       if (!produto) return interaction.editReply({ embeds: [embedErro('Erro ao salvar produto no banco.')] });
 
       const canal = guild.channels.cache.get(CANAL_FREE_ID);
@@ -184,13 +222,31 @@ async function handleCommand(interaction) {
     if (commandName === 'confirmar') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const pedidoId = interaction.options.getInteger('pedido_id');
-      const pedido = db.getPedido(pedidoId);
+      const pedido   = db.getPedido(pedidoId);
       if (!pedido) return interaction.editReply({ embeds: [embedErro(`Pedido #${pedidoId} não encontrado.`)] });
       if (pedido.status !== 'aguardando') return interaction.editReply({ embeds: [embedErro(`Pedido #${pedidoId} já foi ${pedido.status}.`)] });
 
-      const produto = db.getProduto(pedido.produto_id);
       db.confirmarPedido(pedidoId);
 
+      // Pedido de COIN — credita moedas automaticamente
+      if (pedido.produto_nome?.startsWith('COIN-')) {
+        const quantidade = parseInt(pedido.produto_nome.replace('COIN-', ''));
+        db.adicionarSaldo(pedido.comprador_id, quantidade, `Compra de pacote via PIX (Pedido #${pedidoId})`);
+        const novoSaldo = db.getSaldo(pedido.comprador_id);
+
+        try {
+          const comprador = await interaction.client.users.fetch(pedido.comprador_id);
+          const membro    = await guild.members.fetch(pedido.comprador_id);
+          await comprador.send({ embeds: [embedCoinRecebido(membro, quantidade, novoSaldo)] });
+        } catch (_) {}
+
+        await interaction.editReply({ embeds: [embedSucesso(`✅ **${quantidade} 🪙** creditados para <@${pedido.comprador_id}>!\nSaldo atual: **${novoSaldo} 🪙**`)] });
+        _log(guild, 'admin', `Pedido coin #${pedidoId} confirmado — ${quantidade} 🪙 para <@${pedido.comprador_id}>`, user.id);
+        return;
+      }
+
+      // Pedido de PRODUTO normal
+      const produto     = db.getProduto(pedido.produto_id);
       const nomeProduto = produto?.nome || pedido.produto_nome || 'Produto';
       const linkProduto = produto?.link || null;
 
@@ -274,6 +330,98 @@ async function handleCommand(interaction) {
       }
       _log(guild, 'admin', `${sub.toUpperCase()}: <@${alvo.id}> | ${motivo} | por <@${user.id}>`, user.id);
       return;
+    }
+
+    // ── /moeda-enviar ─────────────────────────────────────
+    if (commandName === 'moeda-enviar') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const alvo       = interaction.options.getUser('usuario');
+      const quantidade = interaction.options.getInteger('quantidade');
+      const motivo     = interaction.options.getString('motivo') || 'Enviado pelo admin';
+
+      if (quantidade <= 0) return interaction.editReply({ embeds: [embedErro('A quantidade deve ser maior que 0.')] });
+
+      db.adicionarSaldo(alvo.id, quantidade, motivo);
+      const novoSaldo = db.getSaldo(alvo.id);
+
+      // Notifica o usuário na DM
+      try {
+        const membro = await guild.members.fetch(alvo.id);
+        await alvo.send({ embeds: [embedCoinRecebido(membro, quantidade, novoSaldo)] });
+      } catch (_) {}
+
+      await interaction.editReply({ embeds: [embedSucesso(`**${quantidade} 🪙** enviados para <@${alvo.id}>!\nSaldo atual: **${novoSaldo} 🪙**\nMotivo: ${motivo}`)] });
+      _log(guild, 'admin', `<@${user.id}> enviou ${quantidade} 🪙 para <@${alvo.id}> — ${motivo}`, user.id);
+      return;
+    }
+
+    // ── /moeda-remover ────────────────────────────────────
+    if (commandName === 'moeda-remover') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const alvo       = interaction.options.getUser('usuario');
+      const quantidade = interaction.options.getInteger('quantidade');
+      const motivo     = interaction.options.getString('motivo') || 'Removido pelo admin';
+
+      const saldoAtual = db.getSaldo(alvo.id);
+      if (saldoAtual < quantidade) {
+        return interaction.editReply({ embeds: [embedErro(`<@${alvo.id}> só tem **${saldoAtual} 🪙**. Impossível remover **${quantidade} 🪙**.`)] });
+      }
+
+      db.removerSaldo(alvo.id, quantidade, motivo);
+      const novoSaldo = db.getSaldo(alvo.id);
+
+      await interaction.editReply({ embeds: [embedSucesso(`**${quantidade} 🪙** removidos de <@${alvo.id}>!\nSaldo atual: **${novoSaldo} 🪙**`)] });
+      _log(guild, 'admin', `<@${user.id}> removeu ${quantidade} 🪙 de <@${alvo.id}> — ${motivo}`, user.id);
+      return;
+    }
+
+    // ── /moeda-ver ────────────────────────────────────────
+    if (commandName === 'moeda-ver') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const alvo   = interaction.options.getUser('usuario');
+      const saldo  = db.getSaldo(alvo.id);
+      const extrato = db.getExtrato(alvo.id, 5);
+
+      const { EmbedBuilder: EB } = require('discord.js');
+      const embed = new EB()
+        .setColor(0xF1C40F)
+        .setTitle(`🪙 Saldo de ${alvo.username}`)
+        .setDescription(`**${saldo} 🪙 XIT Coins**`)
+        .setThumbnail(alvo.displayAvatarURL({ dynamic: true }))
+        .setFooter({ text: '⚡ Alpha Xit' });
+
+      if (extrato.length) {
+        const linhas = extrato.map(t =>
+          `${t.tipo === 'credito' ? '➕' : '➖'} ${t.quantidade} 🪙 — ${t.descricao}`
+        ).join('\n');
+        embed.addFields({ name: 'Últimas transações', value: linhas, inline: false });
+      }
+
+      return interaction.editReply({ embeds: [embed] });
+    }
+
+    // ── /saldo ────────────────────────────────────────────
+    if (commandName === 'saldo') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const saldo  = db.getSaldo(user.id);
+      const membro = await guild.members.fetch(user.id);
+      return interaction.editReply({ embeds: [embedSaldo(membro, saldo)] });
+    }
+
+    // ── /extrato ──────────────────────────────────────────
+    if (commandName === 'extrato') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const transacoes = db.getExtrato(user.id, 10);
+      const membro = await guild.members.fetch(user.id);
+      return interaction.editReply({ embeds: [embedExtrato(membro, transacoes)] });
+    }
+
+    // ── /comprar-coins ────────────────────────────────────
+    if (commandName === 'comprar-coins') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const { embedPacotesMoeda } = require('../embeds');
+      const { embed, row } = embedPacotesMoeda();
+      return interaction.editReply({ embeds: [embed], components: [row] });
     }
 
   } catch (err) {

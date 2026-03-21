@@ -25,7 +25,7 @@ function ytUrlToRSS(url) {
   return null;
 }
 
-async function checkYouTube(client) {
+async function checkYouTube(client, primeiroCheck = false) {
   const guildId = process.env.GUILD_ID;
   if (!guildId) return;
 
@@ -46,10 +46,7 @@ async function checkYouTube(client) {
     feed = await parser.parseURL(rssUrl);
   } catch (err) {
     if (err.message.includes('404')) {
-      console.warn('[YT] ⚠️  RSS 404 — URL de @handle não funciona diretamente.');
-      console.warn('[YT] Use o ID do canal: youtube.com/channel/UCxxxxxxxx');
-      console.warn('[YT] Para achar o ID: acesse o canal no YouTube → clique nos 3 pontinhos → "Copiar ID do canal"');
-      console.warn('[YT] Depois rode: /youtube-set url:https://www.youtube.com/channel/SEU_ID');
+      console.warn('[YT] ⚠️  RSS 404 — use o ID do canal: youtube.com/channel/UCxxxxxxxx');
     } else {
       console.error('[YT] Erro ao buscar RSS:', err.message);
     }
@@ -59,14 +56,28 @@ async function checkYouTube(client) {
   if (!feed.items?.length) return;
 
   const latestVideo = feed.items[0];
-  const videoId = latestVideo.id || latestVideo.guid || latestVideo.link;
-  const ultimoId = config?.ultimo_video_id;
+  const videoId     = latestVideo.id || latestVideo.guid || latestVideo.link;
+  const ultimoId    = config?.ultimo_video_id;
 
-  if (videoId === ultimoId) return; // nada novo
+  // Primeiro check do boot — só salva o ID, não posta
+  if (primeiroCheck || !ultimoId) {
+    if (videoId !== ultimoId) {
+      db.updateUltimoVideo(guildId, videoId);
+      console.log(`[YT] Boot — vídeo mais recente salvo: ${latestVideo.title}`);
+    } else {
+      console.log('[YT] Boot — nenhum vídeo novo.');
+    }
+    return;
+  }
+
+  // Checks subsequentes — só posta se for vídeo diferente
+  if (videoId === ultimoId) {
+    console.log('[YT] Sem vídeo novo.');
+    return;
+  }
 
   db.updateUltimoVideo(guildId, videoId);
 
-  // Encontra o canal para postar
   const guild = client.guilds.cache.get(guildId);
   if (!guild) return;
 
@@ -76,46 +87,42 @@ async function checkYouTube(client) {
 
   if (!canal) return;
 
-  // Thumbnail via oEmbed
   const videoIdClean = videoId.includes('watch?v=')
     ? videoId.split('watch?v=')[1]
     : videoId.split(':').pop();
 
-  const thumbnail = `https://img.youtube.com/vi/${videoIdClean}/maxresdefault.jpg`;
-
   const video = {
-    title    : latestVideo.title,
-    link     : latestVideo.link,
-    pubDate  : latestVideo.pubDate
+    title   : latestVideo.title,
+    link    : latestVideo.link,
+    pubDate : latestVideo.pubDate
       ? new Date(latestVideo.pubDate).toLocaleDateString('pt-BR')
       : 'Agora',
-    thumbnail,
+    thumbnail: `https://img.youtube.com/vi/${videoIdClean}/maxresdefault.jpg`,
   };
 
-  // Menciona @Membro se existir
   const cargoMembro = guild.roles.cache.find(r => r.name === '✅ ᴍᴇᴍʙʀᴏ');
   const mencao = cargoMembro ? `<@&${cargoMembro.id}>` : '';
 
   try {
     await canal.send({
-      content: mencao ? `${mencao} 🎬 Novo vídeo publicado!` : '🎬 Novo vídeo publicado!',
+      content: `${mencao} 🎬 Novo vídeo publicado!`.trim(),
       embeds: [embedNovoVideo(video)],
     });
     console.log(`[YT] ✅ Novo vídeo postado: ${video.title}`);
   } catch (err) {
-    console.error('[YT] Erro ao postar vídeo:', err.message);
+    console.error('[YT] Erro ao postar:', err.message);
   }
 }
 
 function startYouTubePoller(client) {
   const intervalMin = parseInt(process.env.YOUTUBE_CHECK_INTERVAL) || 10;
-  console.log(`[YT] Iniciando poller a cada ${intervalMin} minutos...`);
+  console.log(`[YT] Poller iniciado — checando a cada ${intervalMin} min`);
 
-  // Roda uma vez no boot (após 10s para o bot estar pronto)
-  setTimeout(() => checkYouTube(client), 10_000);
+  // Primeiro check: só salva o ID mais recente, NÃO posta
+  setTimeout(() => checkYouTube(client, true), 10_000);
 
-  // Depois roda no intervalo configurado
-  setInterval(() => checkYouTube(client), intervalMin * 60 * 1000);
+  // Checks subsequentes: posta se houver vídeo novo
+  setInterval(() => checkYouTube(client, false), intervalMin * 60 * 1000);
 }
 
 module.exports = { startYouTubePoller };

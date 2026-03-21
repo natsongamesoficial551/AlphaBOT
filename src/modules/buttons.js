@@ -2,16 +2,66 @@ const { PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle, Act
 const db = require('../database');
 const { embedRegistroSucesso, embedJaRegistrado, embedBoasVindasDM,
         embedPIX, embedPedidoConfirmado, embedEntregaProduto,
-        embedListaProdutos, embedProduto, embedErro, embedLog } = require('../embeds');
+        embedListaProdutos, embedProduto, embedErro, embedLog,
+        embedPIXCoin, embedCoinRecebido, embedSaldoInsuficiente, embedSaldo } = require('../embeds');
 
 async function handleButton(interaction) {
   const { customId, guild, member, user } = interaction;
 
   try {
+
+  // ── COMPRAR PACOTE COIN ────────────────────────────────
+  if (customId.startsWith('btn_coin_')) {
+    const pacote = parseInt(customId.replace('btn_coin_', ''));
+    const precos = { 100: '5,00', 300: '10,00', 750: '20,00', 2000: '50,00' };
+    if (!precos[pacote]) return interaction.reply({ embeds: [embedErro('Pacote inválido.')], flags: MessageFlags.Ephemeral });
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    // Salva pedido de coin no DB como pedido especial
+    const pedidoId = db.criarPedido(0, `COIN-${pacote}`, user.id, user.username);
+
+    try {
+      await user.send({ embeds: [embedPIXCoin(pacote, pedidoId)] });
+      await interaction.editReply({ embeds: [{ color: 0x27AE60, description: `✅ Instruções de pagamento enviadas na sua **DM**!\nPedido: \`#coin-${pedidoId}\`` }] });
+    } catch {
+      await interaction.editReply({ embeds: [embedErro('Não consegui enviar DM. Habilite mensagens diretas.')] });
+    }
+    _log(guild, 'compra', `<@${user.id}> solicitou ${pacote} XIT Coins (Pedido coin #${pedidoId})`, user.id);
+    return;
+  }
+
+  // ── COMPRAR PRODUTO COM COINS ──────────────────────────
+  if (customId.startsWith('btn_comprar_coin_')) {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const produtoId = parseInt(customId.replace('btn_comprar_coin_', ''));
+    const produto = db.getProduto(produtoId);
+    if (!produto) return interaction.editReply({ embeds: [embedErro('Produto não encontrado.')] });
+
+    const saldoAtual = db.getSaldo(user.id);
+    if (saldoAtual < produto.preco_coins) {
+      return interaction.editReply({ embeds: [embedSaldoInsuficiente(saldoAtual, produto.preco_coins)] });
+    }
+
+    const debitou = db.removerSaldo(user.id, produto.preco_coins, `Compra: ${produto.nome}`);
+    if (!debitou) return interaction.editReply({ embeds: [embedErro('Saldo insuficiente.')] });
+
+    // Entrega o produto na DM
+    try {
+      await user.send({ embeds: [embedEntregaProduto(produto)] });
+    } catch (_) {}
+
+    await interaction.editReply({ embeds: [{ color: 0x2ECC71, description: `✅ Compra realizada! **${produto.preco_coins} 🪙** debitados.\nSaldo restante: **${db.getSaldo(user.id)} 🪙**\nProduto entregue na sua DM!` }] });
+    _log(guild, 'compra', `<@${user.id}> comprou **${produto.nome}** por ${produto.preco_coins} 🪙`, user.id);
+    return;
+  }
+
+  // ── REGISTRAR ──────────────────────────────────────────
   if (customId === 'btn_registrar') {
     if (db.membroExiste(user.id)) {
       const membro = db.getMembro(user.id);
-      return interaction.reply({ embeds: [embedJaRegistrado(membro?.xit_id)], ephemeral: true });
+      return interaction.reply({ embeds: [embedJaRegistrado(membro?.xit_id)], flags: MessageFlags.Ephemeral });
     }
 
     const modal = new ModalBuilder()

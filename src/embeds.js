@@ -116,25 +116,38 @@ function embedProduto(produto) {
     .setColor(COR.produto)
     .setTitle(`🛒 ${produto.nome}`)
     .setDescription(produto.descricao || 'Sem descrição.')
-    .addFields(
-      { name: '💰 Preço', value: `**R$ ${produto.preco}**`, inline: true },
-      { name: '🆔 ID do produto', value: `\`#${produto.id}\``, inline: true },
-    )
     .setTimestamp()
     .setFooter(FOOTER);
 
+  // Preço PIX
+  embed.addFields({ name: '💰 Preço PIX', value: `**R$ ${produto.preco}**`, inline: true });
+
+  // Preço em coins (se configurado)
+  if (produto.preco_coins && produto.preco_coins > 0) {
+    embed.addFields({ name: '🪙 Preço em XIT Coin', value: `**${produto.preco_coins} 🪙**`, inline: true });
+  }
+
+  embed.addFields({ name: '🆔 ID', value: `\`#${produto.id}\``, inline: true });
+
   if (produto.link) embed.addFields({ name: '🔗 Mais informações', value: produto.link, inline: false });
 
-  const row = new ActionRowBuilder().addComponents(
+  const btns = [
     new ButtonBuilder()
       .setCustomId(`btn_comprar_${produto.id}`)
-      .setLabel('💳 Comprar agora')
+      .setLabel('💳 Comprar via PIX')
       .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId(`btn_info_${produto.id}`)
-      .setLabel('ℹ️ Mais detalhes')
-      .setStyle(ButtonStyle.Secondary)
-  );
+  ];
+
+  if (produto.preco_coins && produto.preco_coins > 0) {
+    btns.push(
+      new ButtonBuilder()
+        .setCustomId(`btn_comprar_coin_${produto.id}`)
+        .setLabel(`🪙 Comprar com ${produto.preco_coins} Coins`)
+        .setStyle(ButtonStyle.Primary)
+    );
+  }
+
+  const row = new ActionRowBuilder().addComponents(...btns);
   return { embed, row };
 }
 
@@ -326,6 +339,109 @@ function embedSucesso(msg) {
     .setFooter(FOOTER);
 }
 
+// ── XIT Coin ─────────────────────────────────────────────
+
+function embedSaldo(member, saldo) {
+  return new EmbedBuilder()
+    .setColor(0xF1C40F)
+    .setTitle('🪙 Seu Saldo — XIT Coin')
+    .setDescription(`<@${member.id}>, você tem **${saldo} 🪙 XIT Coins**!`)
+    .addFields({ name: '💡 Como usar', value: 'Use suas moedas para comprar produtos diretamente na loja!', inline: false })
+    .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+    .setTimestamp()
+    .setFooter(FOOTER);
+}
+
+function embedExtrato(member, transacoes) {
+  const embed = new EmbedBuilder()
+    .setColor(0xF1C40F)
+    .setTitle('📋 Extrato — XIT Coin')
+    .setDescription(`Últimas movimentações de <@${member.id}>`)
+    .setTimestamp()
+    .setFooter(FOOTER);
+
+  if (!transacoes.length) {
+    embed.addFields({ name: 'Sem movimentações', value: 'Nenhuma transação encontrada.', inline: false });
+    return embed;
+  }
+
+  transacoes.forEach(t => {
+    const sinal = t.tipo === 'credito' ? '➕' : '➖';
+    const cor   = t.tipo === 'credito' ? '+' : '-';
+    embed.addFields({
+      name: `${sinal} ${cor}${t.quantidade} 🪙 — ${t.descricao || t.tipo}`,
+      value: `📅 ${t.criado_em}`,
+      inline: false,
+    });
+  });
+  return embed;
+}
+
+function embedPacotesMoeda() {
+  const embed = new EmbedBuilder()
+    .setColor(0xF1C40F)
+    .setTitle('🪙 Comprar XIT Coins')
+    .setDescription('Escolha um pacote abaixo, pague via PIX e aguarde a confirmação da equipe!')
+    .addFields(
+      { name: '📦 Pacote Starter',  value: '**100 🪙** por **R$ 5,00**',  inline: true },
+      { name: '📦 Pacote Plus',     value: '**300 🪙** por **R$ 10,00**', inline: true },
+      { name: '📦 Pacote Pro',      value: '**750 🪙** por **R$ 20,00**', inline: true },
+      { name: '📦 Pacote Elite',    value: '**2000 🪙** por **R$ 50,00**', inline: true },
+    )
+    .setTimestamp()
+    .setFooter(FOOTER);
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('btn_coin_100').setLabel('100 🪙 — R$5').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('btn_coin_300').setLabel('300 🪙 — R$10').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('btn_coin_750').setLabel('750 🪙 — R$20').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('btn_coin_2000').setLabel('2000 🪙 — R$50').setStyle(ButtonStyle.Success),
+  );
+  return { embed, row };
+}
+
+function embedPIXCoin(pacote, pedidoId) {
+  const precos = { 100: '5,00', 300: '10,00', 750: '20,00', 2000: '50,00' };
+  return new EmbedBuilder()
+    .setColor(0x27AE60)
+    .setTitle('💳 Pagamento via PIX — XIT Coins')
+    .setDescription(`Você escolheu o pacote de **${pacote} 🪙 XIT Coins**.\n\nRealize o pagamento e aguarde a confirmação!`)
+    .addFields(
+      { name: '🪙 Moedas', value: `**${pacote} XIT Coins**`, inline: true },
+      { name: '💰 Valor', value: `**R$ ${precos[pacote]}**`, inline: true },
+      { name: '🆔 Pedido', value: `\`#coin-${pedidoId}\``, inline: true },
+      { name: '🔑 Chave PIX', value: `\`${process.env.PIX_KEY || 'Contate um staff'}\``, inline: false },
+      { name: '👤 Favorecido', value: process.env.PIX_NAME || 'Alpha Xit', inline: false },
+      { name: '📋 Próximo passo', value: 'Envie o comprovante para um **@🛡️ ꜱᴛᴀꜰꜰ** após o pagamento.', inline: false },
+    )
+    .setTimestamp()
+    .setFooter({ text: `⚡ Alpha Xit • Pedido Coin #${pedidoId}` });
+}
+
+function embedCoinRecebido(member, quantidade, novoSaldo) {
+  return new EmbedBuilder()
+    .setColor(0xF1C40F)
+    .setTitle('🪙 XIT Coins Recebidas!')
+    .setDescription(`<@${member.id}>, você recebeu **${quantidade} 🪙 XIT Coins**!`)
+    .addFields({ name: '💰 Saldo atual', value: `**${novoSaldo} 🪙**`, inline: true })
+    .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+    .setTimestamp()
+    .setFooter(FOOTER);
+}
+
+function embedSaldoInsuficiente(saldoAtual, precoCoins) {
+  return new EmbedBuilder()
+    .setColor(COR.erro)
+    .setTitle('❌ Saldo Insuficiente')
+    .setDescription(`Você não tem XIT Coins suficientes para comprar este produto.`)
+    .addFields(
+      { name: '🪙 Seu saldo', value: `**${saldoAtual} 🪙**`, inline: true },
+      { name: '💸 Necessário', value: `**${precoCoins} 🪙**`, inline: true },
+      { name: '💡 Como obter', value: 'Compre mais XIT Coins usando o comando **/comprar-coins**!', inline: false },
+    )
+    .setFooter(FOOTER);
+}
+
 module.exports = {
   embedBoasVindas, embedRegras, embedRegistro, embedXitFree, embedComoComprar,
   embedProduto, embedProdutoFree, embedListaProdutos,
@@ -333,4 +449,5 @@ module.exports = {
   embedPIX, embedPedidoConfirmado, embedEntregaProduto,
   embedNovoVideo,
   embedPedidosAbertos, embedLog, embedErro, embedSucesso,
+  embedSaldo, embedExtrato, embedPacotesMoeda, embedPIXCoin, embedCoinRecebido, embedSaldoInsuficiente,
 };
