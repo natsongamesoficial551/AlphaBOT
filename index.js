@@ -1,29 +1,21 @@
-// Carrega .env localmente — no Render as variáveis já vêm do ambiente
-require('dotenv').config({ path: require('path').resolve(__dirname, '.env') });
+require('dotenv').config();
 
-// Diagnóstico de variáveis no boot
 const _token = process.env.DISCORD_TOKEN;
 const _guild = process.env.GUILD_ID;
 console.log(`[ENV] DISCORD_TOKEN: ${_token ? '✅ carregado' : '❌ NÃO ENCONTRADO'}`);
 console.log(`[ENV] GUILD_ID:      ${_guild ? '✅ ' + _guild : '❌ NÃO ENCONTRADO'}`);
 
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
-const { getDB }              = require('./src/database');
-const { seedTodosCanais }    = require('./src/seeder');
-const { registerCommands }   = require('./src/registerCommands');
-const { handleButton, handleModal } = require('./src/modules/buttons');
-const { handleCommand }      = require('./src/modules/commands');
-const { startYouTubePoller } = require('./src/modules/youtube');
-const { startAutoPing }      = require('./src/modules/ping');
 
-// Servidor HTTP para o Render não cancelar o deploy
+// ── HTTP server (Render precisa de porta aberta) ──────────
 const http = require('http');
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200);
   res.end('AlphaBot online ✅');
-}).listen(PORT, () => console.log(`[HTTP] Servidor rodando na porta ${PORT}`));
+}).listen(PORT, () => console.log(`[HTTP] Porta ${PORT} aberta`));
 
+// ── Cliente Discord ───────────────────────────────────────
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -34,99 +26,83 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel, Partials.GuildMember],
 });
 
-// ── READY ────────────────────────────────────────────────
+// ── READY ─────────────────────────────────────────────────
 client.once('ready', async () => {
-  console.log(`\n✅ AlphaBot online como ${client.user.tag}`);
-  console.log(`📡 Conectado em ${client.guilds.cache.size} servidor(es)\n`);
+  console.log(`✅ AlphaBot online como ${client.user.tag}`);
+  console.log(`📡 ${client.guilds.cache.size} servidor(es)`);
 
-  // 1. Inicia DB
-  console.log('[BOOT] Iniciando banco de dados...');
+  // Lazy load dos módulos pesados APÓS o login
+  const { getDB }              = require('./src/database');
+  const { seedTodosCanais }    = require('./src/seeder');
+  const { registerCommands }   = require('./src/registerCommands');
+  const { startYouTubePoller } = require('./src/modules/youtube');
+  const { startAutoPing }      = require('./src/modules/ping');
+
+  console.log('[BOOT] Carregando banco de dados...');
   await getDB();
-  console.log('[BOOT] ✅ SQLite pronto.');
+  console.log('[BOOT] ✅ DB pronto');
 
-  // 2. Registra slash commands
   console.log('[BOOT] Registrando slash commands...');
   await registerCommands();
-  console.log('[BOOT] ✅ Slash commands registrados.');
+  console.log('[BOOT] ✅ Commands registrados');
 
-  // 3. Seed de mensagens fixas
-  console.log('[BOOT] Iniciando seed dos canais...');
   const guildId = process.env.GUILD_ID;
   if (guildId) {
     const guild = client.guilds.cache.get(guildId);
     if (guild) {
+      console.log('[BOOT] Iniciando seed...');
       await seedTodosCanais(guild);
+      console.log('[BOOT] ✅ Seed concluído');
     } else {
       console.warn('[BOOT] ⚠️ Guild não encontrada. Verifique o GUILD_ID.');
     }
   }
-  console.log('[BOOT] ✅ Seed concluído.');
 
-  // 4. YouTube poller
-  console.log('[BOOT] Iniciando YouTube poller...');
   startYouTubePoller(client);
-
-  // 5. Auto-ping
   startAutoPing();
 
-  console.log('\n🚀 AlphaBot 100% pronto!\n');
+  console.log('🚀 AlphaBot 100% pronto!');
 });
 
-// ── INTERAÇÕES (botões + slash commands) ─────────────────
+// ── INTERAÇÕES ────────────────────────────────────────────
 client.on('interactionCreate', async (interaction) => {
   try {
-    if (interaction.isButton()) {
-      await handleButton(interaction);
-    } else if (interaction.isChatInputCommand()) {
-      await handleCommand(interaction);
-    } else if (interaction.isModalSubmit()) {
-      await handleModal(interaction);
-    }
+    const { handleButton, handleModal } = require('./src/modules/buttons');
+    const { handleCommand }             = require('./src/modules/commands');
+
+    if (interaction.isButton())          await handleButton(interaction);
+    else if (interaction.isChatInputCommand()) await handleCommand(interaction);
+    else if (interaction.isModalSubmit()) await handleModal(interaction);
   } catch (err) {
-    console.error('[INTERACTION] Erro:', err);
-    const msg = { embeds: [{ color: 0xE74C3C, description: '❌ Ocorreu um erro. Tente novamente.' }], ephemeral: true };
+    console.error('[INTERACTION]', err.message);
     try {
-      if (interaction.deferred || interaction.replied) {
-        await interaction.editReply(msg);
-      } else {
-        await interaction.reply(msg);
-      }
+      const payload = { embeds: [{ color: 0xE74C3C, description: `❌ Erro: \`${err.message}\`` }], flags: 64 };
+      if (interaction.deferred || interaction.replied) await interaction.editReply(payload);
+      else await interaction.reply(payload);
     } catch (_) {}
   }
 });
 
-// ── NOVO MEMBRO ──────────────────────────────────────────
+// ── NOVO MEMBRO ───────────────────────────────────────────
 client.on('guildMemberAdd', async (member) => {
-  // Dá cargo de Visitante automaticamente
   const cargoVisitante = member.guild.roles.cache.find(r => r.name === '👤 ᴠɪꜱɪᴛᴀɴᴛᴇ');
-  if (cargoVisitante) {
-    try { await member.roles.add(cargoVisitante); } catch (_) {}
-  }
+  if (cargoVisitante) try { await member.roles.add(cargoVisitante); } catch (_) {}
 
-  // Ping no canal de boas-vindas
-  const canal = member.guild.channels.cache.find(c => c.name === '👋・boas-vindas');
-  if (canal) {
-    try {
-      await canal.send({ content: `👋 Bem-vindo(a) <@${member.id}>! Registre-se no canal <#${member.guild.channels.cache.find(c => c.name === '✅・registro')?.id || 'registro'}>.` });
-    } catch (_) {}
-  }
+  const chBV = member.guild.channels.cache.find(c => c.name === '👋・boas-vindas');
+  const chReg = member.guild.channels.cache.find(c => c.name === '✅・registro');
+  if (chBV) try {
+    await chBV.send(`👋 Bem-vindo(a) <@${member.id}>! Registre-se em ${chReg ? `<#${chReg.id}>` : '#registro'}.`);
+  } catch (_) {}
 });
 
-// ── ERROR HANDLING ───────────────────────────────────────
-client.on('error', err => console.error('[CLIENT ERROR]', err));
-process.on('unhandledRejection', err => console.error('[UNHANDLED]', err));
+// ── ERRORS ────────────────────────────────────────────────
+client.on('error', err => console.error('[CLIENT ERROR]', err.message));
+process.on('unhandledRejection', err => console.error('[UNHANDLED]', err?.message || err));
 
-// ── LOGIN ────────────────────────────────────────────────
-const token = process.env.DISCORD_TOKEN;
-if (!token) {
-  console.error('❌ DISCORD_TOKEN não encontrado');
-  process.exit(1);
-}
+// ── LOGIN ─────────────────────────────────────────────────
+if (!_token) { console.error('❌ DISCORD_TOKEN não encontrado'); process.exit(1); }
 
-console.log('[LOGIN] Tentando conectar ao Discord...');
-client.login(token)
-  .then(() => console.log('[LOGIN] ✅ Login enviado, aguardando evento ready...'))
-  .catch(err => {
-    console.error('[LOGIN] ❌ Falha ao conectar:', err.message);
-    process.exit(1);
-  });
+console.log('[LOGIN] Conectando ao Discord...');
+client.login(_token)
+  .then(() => console.log('[LOGIN] ✅ Conectado!'))
+  .catch(err => { console.error('[LOGIN] ❌', err.message); process.exit(1); });
