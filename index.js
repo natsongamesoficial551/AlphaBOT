@@ -1,4 +1,11 @@
-require('dotenv').config();
+// Carrega .env localmente — no Render as variáveis já vêm do ambiente
+require('dotenv').config({ path: require('path').resolve(__dirname, '.env') });
+
+// Diagnóstico de variáveis no boot
+const _token = process.env.DISCORD_TOKEN;
+const _guild = process.env.GUILD_ID;
+console.log(`[ENV] DISCORD_TOKEN: ${_token ? '✅ carregado' : '❌ NÃO ENCONTRADO'}`);
+console.log(`[ENV] GUILD_ID:      ${_guild ? '✅ ' + _guild : '❌ NÃO ENCONTRADO'}`);
 
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { getDB }              = require('./src/database');
