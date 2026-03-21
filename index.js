@@ -9,6 +9,14 @@ const { handleCommand }      = require('./src/modules/commands');
 const { startYouTubePoller } = require('./src/modules/youtube');
 const { startAutoPing }      = require('./src/modules/ping');
 
+// Servidor HTTP para o Render não cancelar o deploy
+const http = require('http');
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end('AlphaBot online ✅');
+}).listen(PORT, () => console.log(`[HTTP] Servidor rodando na porta ${PORT}`));
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
