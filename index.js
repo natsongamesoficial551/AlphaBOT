@@ -7,6 +7,7 @@ const { registerCommands }   = require('./src/registerCommands');
 const { handleButton, handleModal } = require('./src/modules/buttons');
 const { handleCommand }      = require('./src/modules/commands');
 const { startYouTubePoller } = require('./src/modules/youtube');
+const { startAutoPing }      = require('./src/modules/ping');
 
 const client = new Client({
   intents: [
@@ -43,6 +44,9 @@ client.once('ready', async () => {
 
   // 4. Inicia poller do YouTube
   startYouTubePoller(client);
+
+  // 5. Auto-ping para não hibernar no Render
+  startAutoPing();
 
   console.log('\n🚀 AlphaBot pronto!\n');
 });
