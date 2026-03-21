@@ -1,0 +1,255 @@
+const initSqlJs = require('sql.js');
+const fs = require('fs');
+const path = require('path');
+
+const DB_PATH = process.env.DB_PATH
+  ? path.resolve(process.env.DB_PATH)
+  : path.join(__dirname, '..', 'data', 'alphabot.db');
+
+let db;
+
+async function getDB() {
+  if (db) return db;
+  const SQL = await initSqlJs();
+  const dir = path.dirname(DB_PATH);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  db = fs.existsSync(DB_PATH)
+    ? new SQL.Database(fs.readFileSync(DB_PATH))
+    : new SQL.Database();
+  _createTables();
+  _save();
+  return db;
+}
+
+function _save() {
+  if (!db) return;
+  fs.writeFileSync(DB_PATH, Buffer.from(db.export()));
+}
+
+function _createTables() {
+  db.run(`CREATE TABLE IF NOT EXISTS mensagens_fixas (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id  TEXT NOT NULL,
+    canal_id  TEXT NOT NULL,
+    tipo      TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    UNIQUE(guild_id, tipo)
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS membros (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    discord_id    TEXT UNIQUE NOT NULL,
+    username      TEXT,
+    xit_id        TEXT UNIQUE,
+    registrado_em TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS produtos (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    nome        TEXT NOT NULL,
+    descricao   TEXT,
+    tipo        TEXT DEFAULT 'pago',
+    preco       TEXT,
+    link        TEXT,
+    imagem_url  TEXT,
+    categoria   TEXT DEFAULT 'geral',
+    ativo       INTEGER DEFAULT 1,
+    message_id  TEXT,
+    canal_id    TEXT,
+    criado_em   TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS pedidos (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    produto_id     INTEGER,
+    produto_nome   TEXT,
+    comprador_id   TEXT NOT NULL,
+    comprador_nome TEXT,
+    status         TEXT DEFAULT 'aguardando',
+    criado_em      TEXT DEFAULT (datetime('now','localtime')),
+    confirmado_em  TEXT
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS yt_config (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id        TEXT UNIQUE NOT NULL,
+    canal_id        TEXT,
+    yt_url          TEXT,
+    ultimo_video_id TEXT,
+    ativo           INTEGER DEFAULT 1
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS logs (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id   TEXT,
+    tipo       TEXT,
+    descricao  TEXT,
+    autor_id   TEXT,
+    criado_em  TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
+  _migrate();
+}
+
+function _migrate() {
+  // Adiciona colunas novas em tabelas existentes sem apagar dados
+  const migrations = [
+    { table: 'produtos',  column: 'tipo',      def: `TEXT DEFAULT 'pago'` },
+    { table: 'produtos',  column: 'imagem_url', def: `TEXT` },
+    { table: 'produtos',  column: 'categoria',  def: `TEXT DEFAULT 'geral'` },
+    { table: 'produtos',  column: 'message_id', def: `TEXT` },
+    { table: 'produtos',  column: 'canal_id',   def: `TEXT` },
+    { table: 'membros',   column: 'xit_id',     def: `TEXT` },
+  ];
+
+  for (const m of migrations) {
+    try {
+      db.run(`ALTER TABLE ${m.table} ADD COLUMN ${m.column} ${m.def}`);
+      console.log(`[DB] Migração: coluna '${m.column}' adicionada em '${m.table}'`);
+    } catch (_) {
+      // Coluna já existe — ignorar
+    }
+  }
+}
+
+function run(sql, params = []) {
+  db.run(sql, params);
+  _save();
+}
+
+function query(sql, params = []) {
+  const stmt = db.prepare(sql);
+  stmt.bind(params);
+  const rows = [];
+  while (stmt.step()) rows.push(stmt.getAsObject());
+  stmt.free();
+  return rows;
+}
+
+function get(sql, params = []) {
+  return query(sql, params)[0] || null;
+}
+
+// ── Mensagens fixas ──────────────────────────────────────
+function getMsgFixa(guildId, tipo) {
+  return get(`SELECT * FROM mensagens_fixas WHERE guild_id=? AND tipo=?`, [guildId, tipo]);
+}
+
+function saveMsgFixa(guildId, canalId, tipo, messageId) {
+  run(`INSERT INTO mensagens_fixas (guild_id, canal_id, tipo, message_id)
+       VALUES (?,?,?,?)
+       ON CONFLICT(guild_id, tipo) DO UPDATE SET canal_id=excluded.canal_id, message_id=excluded.message_id`,
+    [guildId, canalId, tipo, messageId]);
+}
+
+function deleteMsgFixa(guildId, tipo) {
+  run(`DELETE FROM mensagens_fixas WHERE guild_id=? AND tipo=?`, [guildId, tipo]);
+}
+
+// ── Membros ──────────────────────────────────────────────
+function registrarMembro(discordId, username, xitId) {
+  run(`INSERT OR IGNORE INTO membros (discord_id, username, xit_id) VALUES (?,?,?)`, [discordId, username, xitId]);
+}
+
+function membroExiste(discordId) {
+  return !!get(`SELECT id FROM membros WHERE discord_id=?`, [discordId]);
+}
+
+function xitIdEmUso(xitId) {
+  return !!get(`SELECT id FROM membros WHERE xit_id=?`, [xitId]);
+}
+
+function getMembro(discordId) {
+  return get(`SELECT * FROM membros WHERE discord_id=?`, [discordId]);
+}
+
+function totalMembros() {
+  return get(`SELECT COUNT(*) as total FROM membros`)?.total || 0;
+}
+
+// ── Produtos ─────────────────────────────────────────────
+function addProduto(nome, descricao, preco, link, imagemUrl, categoria, tipo = 'pago') {
+  db.run(
+    `INSERT INTO produtos (nome,descricao,tipo,preco,link,imagem_url,categoria) VALUES (?,?,?,?,?,?,?)`,
+    [nome, descricao, tipo, preco || 'Grátis', link || '', imagemUrl || '', categoria || 'geral']
+  );
+  // sql.js: pega o rowid direto da instância do db
+  const rowid = db.exec('SELECT last_insert_rowid()')[0].values[0][0];
+  _save();
+  return get(`SELECT * FROM produtos WHERE id=?`, [rowid]);
+}
+
+function listarProdutos(tipo = null) {
+  if (tipo) return query(`SELECT * FROM produtos WHERE ativo=1 AND tipo=? ORDER BY id DESC`, [tipo]);
+  return query(`SELECT * FROM produtos WHERE ativo=1 ORDER BY id DESC`);
+}
+
+function getProduto(id) {
+  return get(`SELECT * FROM produtos WHERE id=? AND ativo=1`, [id]);
+}
+
+function deletarProduto(id) {
+  run(`UPDATE produtos SET ativo=0 WHERE id=?`, [id]);
+}
+
+function saveProdutoMsg(id, messageId, canalId) {
+  run(`UPDATE produtos SET message_id=?, canal_id=? WHERE id=?`, [messageId, canalId, id]);
+}
+
+// ── Pedidos ──────────────────────────────────────────────
+function criarPedido(produtoId, produtoNome, compradorId, compradorNome) {
+  run(`INSERT INTO pedidos (produto_id,produto_nome,comprador_id,comprador_nome) VALUES (?,?,?,?)`,
+    [produtoId, produtoNome, compradorId, compradorNome]);
+  return get(`SELECT last_insert_rowid() as id`).id;
+}
+
+function confirmarPedido(pedidoId) {
+  run(`UPDATE pedidos SET status='confirmado', confirmado_em=datetime('now','localtime') WHERE id=?`, [pedidoId]);
+}
+
+function cancelarPedido(pedidoId) {
+  run(`UPDATE pedidos SET status='cancelado' WHERE id=?`, [pedidoId]);
+}
+
+function getPedidosAbertos() {
+  return query(`SELECT * FROM pedidos WHERE status='aguardando' ORDER BY criado_em DESC`);
+}
+
+function getPedidosByUser(userId) {
+  return query(`SELECT * FROM pedidos WHERE comprador_id=? ORDER BY criado_em DESC LIMIT 10`, [userId]);
+}
+
+function getPedido(id) {
+  return get(`SELECT * FROM pedidos WHERE id=?`, [id]);
+}
+
+// ── YouTube ──────────────────────────────────────────────
+function getYTConfig(guildId) {
+  return get(`SELECT * FROM yt_config WHERE guild_id=?`, [guildId]);
+}
+
+function setYTConfig(guildId, canalId, ytUrl) {
+  run(`INSERT INTO yt_config (guild_id,canal_id,yt_url) VALUES (?,?,?)
+       ON CONFLICT(guild_id) DO UPDATE SET canal_id=excluded.canal_id, yt_url=excluded.yt_url, ativo=1`,
+    [guildId, canalId, ytUrl]);
+}
+
+function updateUltimoVideo(guildId, videoId) {
+  run(`UPDATE yt_config SET ultimo_video_id=? WHERE guild_id=?`, [videoId, guildId]);
+}
+
+// ── Logs ─────────────────────────────────────────────────
+function addLog(guildId, tipo, descricao, autorId = '') {
+  run(`INSERT INTO logs (guild_id,tipo,descricao,autor_id) VALUES (?,?,?,?)`,
+    [guildId, tipo, descricao, autorId]);
+}
+
+module.exports = {
+  getDB,
+  getMsgFixa, saveMsgFixa, deleteMsgFixa,
+  registrarMembro, membroExiste, xitIdEmUso, getMembro, totalMembros,
+  addProduto, listarProdutos, getProduto, deletarProduto, saveProdutoMsg,
+  criarPedido, confirmarPedido, cancelarPedido, getPedidosAbertos, getPedidosByUser, getPedido,
+  getYTConfig, setYTConfig, updateUltimoVideo,
+  addLog,
+};
