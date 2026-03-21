@@ -40,30 +40,36 @@ client.once('ready', async () => {
   console.log(`📡 Conectado em ${client.guilds.cache.size} servidor(es)\n`);
 
   // 1. Inicia DB
+  console.log('[BOOT] Iniciando banco de dados...');
   await getDB();
-  console.log('[DB] SQLite pronto.');
+  console.log('[BOOT] ✅ SQLite pronto.');
 
   // 2. Registra slash commands
+  console.log('[BOOT] Registrando slash commands...');
   await registerCommands();
+  console.log('[BOOT] ✅ Slash commands registrados.');
 
-  // 3. Seed de mensagens fixas (lê DB antes de enviar)
+  // 3. Seed de mensagens fixas
+  console.log('[BOOT] Iniciando seed dos canais...');
   const guildId = process.env.GUILD_ID;
   if (guildId) {
     const guild = client.guilds.cache.get(guildId);
     if (guild) {
       await seedTodosCanais(guild);
     } else {
-      console.warn('[SEED] Guild não encontrada. Verifique o GUILD_ID no .env');
+      console.warn('[BOOT] ⚠️ Guild não encontrada. Verifique o GUILD_ID.');
     }
   }
+  console.log('[BOOT] ✅ Seed concluído.');
 
-  // 4. Inicia poller do YouTube
+  // 4. YouTube poller
+  console.log('[BOOT] Iniciando YouTube poller...');
   startYouTubePoller(client);
 
-  // 5. Auto-ping para não hibernar no Render
+  // 5. Auto-ping
   startAutoPing();
 
-  console.log('\n🚀 AlphaBot pronto!\n');
+  console.log('\n🚀 AlphaBot 100% pronto!\n');
 });
 
 // ── INTERAÇÕES (botões + slash commands) ─────────────────
@@ -113,11 +119,14 @@ process.on('unhandledRejection', err => console.error('[UNHANDLED]', err));
 // ── LOGIN ────────────────────────────────────────────────
 const token = process.env.DISCORD_TOKEN;
 if (!token) {
-  console.error('❌ DISCORD_TOKEN não encontrado no .env');
+  console.error('❌ DISCORD_TOKEN não encontrado');
   process.exit(1);
 }
 
-client.login(token).catch(err => {
-  console.error('❌ Falha ao conectar:', err.message);
-  process.exit(1);
-});
+console.log('[LOGIN] Tentando conectar ao Discord...');
+client.login(token)
+  .then(() => console.log('[LOGIN] ✅ Login enviado, aguardando evento ready...'))
+  .catch(err => {
+    console.error('[LOGIN] ❌ Falha ao conectar:', err.message);
+    process.exit(1);
+  });
