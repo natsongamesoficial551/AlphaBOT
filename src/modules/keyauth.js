@@ -76,33 +76,32 @@ async function criarContaKeyAuth(username, password, key) {
   return data;
 }
 
-// ─── Embed principal ─────────────────────────────────────────────────────────
-function embedKeyAuth() {
-  return new EmbedBuilder()
+// ─── Embed + Row principal — padrão {embed, row} igual aos outros canais ──────
+function embedKeyAuthPayload() {
+  const embed = new EmbedBuilder()
     .setColor(0x5865F2)
     .setTitle('🔑 KeyAuth — Criar Conta')
     .setDescription(
       '> Crie sua conta no **KeyAuth** e acesse nosso software instantaneamente!\n\n' +
       '**Planos disponíveis:**\n\n' +
-      `🆓 **Grátis** — 24 horas de acesso\n` +
-      `📅 **Mensal** — 1 mês · R$ 25,00\n` +
-      `📆 **Anual** — 1 ano · R$ 40,00\n` +
-      `♾️ **Permanente** — Acesso vitalício · R$ 85,00\n\n` +
+      '🆓 **Grátis** — 24 horas de acesso\n' +
+      '📅 **Mensal** — 1 mês · R$ 25,00\n' +
+      '📆 **Anual** — 1 ano · R$ 40,00\n' +
+      '♾️ **Permanente** — Acesso vitalício · R$ 85,00\n\n' +
       '> Clique em **KeyAuth** abaixo para criar sua conta!'
     )
     .setFooter({ text: `${KA_APP_NAME} • Powered by KeyAuth` })
     .setTimestamp();
-}
 
-// ─── Row com botão KeyAuth ────────────────────────────────────────────────────
-function rowKeyAuth() {
-  return new ActionRowBuilder().addComponents(
+  const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('btn_keyauth_abrir')
       .setLabel('KeyAuth')
       .setEmoji('🔑')
       .setStyle(ButtonStyle.Primary)
   );
+
+  return { embed, row };
 }
 
 // ─── Embed de seleção de plano ────────────────────────────────────────────────
@@ -433,17 +432,9 @@ async function handleKeyAuthModal(interaction) {
   return false;
 }
 
-// ─── Comando /keyauth-setup ───────────────────────────────────────────────────
-async function enviarEmbedKeyAuth(channel) {
-  await channel.send({
-    embeds: [embedKeyAuth()],
-    components: [rowKeyAuth()],
-  });
-}
-
 module.exports = {
   handleKeyAuthButton,
   handleKeyAuthModal,
-  enviarEmbedKeyAuth,
+  embedKeyAuthPayload,
   KA_CHANNEL_ID,
 };
