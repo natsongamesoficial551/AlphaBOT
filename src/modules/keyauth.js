@@ -13,7 +13,8 @@ const crypto = require('crypto');
 
 // ─── Config KeyAuth ──────────────────────────────────────────────────────────
 const KA_OWNER_ID    = process.env.KEYAUTH_OWNER_ID;
-const KA_APP_SECRET  = process.env.KEYAUTH_APP_SECRET;
+const KA_SELLER_KEY  = process.env.KEYAUTH_SELLER_KEY; // Seller Key de 32 chars (App Settings no painel)
+const KA_APP_SECRET  = process.env.KEYAUTH_APP_SECRET; // App Secret (usado para login do usuário)
 const KA_APP_NAME    = process.env.KEYAUTH_APP_NAME    || "Borgesnatan09's Application";
 const KA_APP_VERSION = process.env.KEYAUTH_APP_VERSION || '1.0';
 const KA_CHANNEL_ID  = '1488295073274790015';
@@ -29,7 +30,7 @@ const PLANOS = {
 // ─── KeyAuth API ─────────────────────────────────────────────────────────────
 async function keyauthRequest(params) {
   const base = 'https://keyauth.win/api/seller/';
-  const query = new URLSearchParams({ sellerkey: KA_APP_SECRET, ...params });
+  const query = new URLSearchParams({ sellerkey: KA_SELLER_KEY, ...params });
   const res = await axios.get(`${base}?${query.toString()}`, { timeout: 10000 });
   return res.data;
 }
