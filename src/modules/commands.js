@@ -2,7 +2,7 @@ const { SlashCommandBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilde
 const db = require('../database');
 const { embedProduto, embedProdutoFree, embedListaProdutos, embedPedidosAbertos, embedErro, embedSucesso, embedLog,
         embedPedidoConfirmado, embedEntregaProduto, embedSaldo, embedExtrato, embedCoinRecebido } = require('../embeds');
-const { embedKeyAuthPayload, KA_CHANNEL_ID } = require('./keyauth');
+const { embedAuthPayload, AUTH_CHANNEL_ID } = require('./myauth');
 
 const CANAL_PAGO_ID = '1484718869716140163';
 const CANAL_FREE_ID = '1484718898413703270';
@@ -10,8 +10,13 @@ const CANAL_FREE_ID = '1484718898413703270';
 const commands = [
 
   new SlashCommandBuilder()
-    .setName('keyauth-setup')
-    .setDescription('Envia o embed de criação de conta KeyAuth no canal configurado')
+    .setName('auth-setup')
+    .setDescription('Envia o embed de criação de conta no canal configurado')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles),
+
+  new SlashCommandBuilder()
+    .setName('auth-usuarios')
+    .setDescription('Lista todos os usuários cadastrados no sistema de auth')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles),
 
   new SlashCommandBuilder()
@@ -432,16 +437,43 @@ async function handleCommand(interaction) {
       return interaction.editReply({ embeds: [embed], components: [row] });
     }
 
-    // ── /keyauth-setup ────────────────────────────────────
-    if (commandName === 'keyauth-setup') {
+    // ── /auth-setup ───────────────────────────────────────
+    if (commandName === 'auth-setup') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      const channel = interaction.guild.channels.cache.get(KA_CHANNEL_ID);
+      const channel = interaction.guild.channels.cache.get(AUTH_CHANNEL_ID);
       if (!channel) {
-        return interaction.editReply({ embeds: [embedErro(`Canal KeyAuth não encontrado! ID: \`${KA_CHANNEL_ID}\``)] });
+        return interaction.editReply({ embeds: [embedErro(`Canal de auth não encontrado! Configure AUTH_CHANNEL_ID no .env (atual: \`${AUTH_CHANNEL_ID}\`)`)] });
       }
-      const { embed, row } = embedKeyAuthPayload();
+      const { embed, row } = embedAuthPayload();
       await channel.send({ embeds: [embed], components: [row] });
-      return interaction.editReply({ embeds: [{ color: 0x2ECC71, description: `✅ Embed KeyAuth enviado em <#${KA_CHANNEL_ID}>!` }] });
+      return interaction.editReply({ embeds: [{ color: 0x2ECC71, description: `✅ Embed de autenticação enviado em <#${AUTH_CHANNEL_ID}>!` }] });
+    }
+
+    // ── /auth-usuarios ────────────────────────────────────
+    if (commandName === 'auth-usuarios') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const { listarAuthUsers, totalAuthUsers } = require('../database');
+      const total   = totalAuthUsers();
+      const usuarios = listarAuthUsers(20);
+
+      if (!usuarios.length) {
+        return interaction.editReply({ embeds: [embedErro('Nenhum usuário cadastrado ainda.')] });
+      }
+
+      const linhas = usuarios.map(u => {
+        const expStr = u.expiry === 'permanent' ? '♾️ Permanente'
+          : u.expiry ? `📅 ${new Date(u.expiry).toLocaleDateString('pt-BR')}` : '?';
+        return `\`${u.username}\` — ${u.plan} — ${expStr}${u.discord_id ? ` — <@${u.discord_id}>` : ''}`;
+      }).join('\n');
+
+      const embed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle(`🔑 Usuários Auth — ${total} cadastrado(s)`)
+        .setDescription(linhas.slice(0, 4000))
+        .setFooter({ text: 'Mostrando últimos 20 • Alpha Xit Auth' })
+        .setTimestamp();
+
+      return interaction.editReply({ embeds: [embed] });
     }
 
   } catch (err) {

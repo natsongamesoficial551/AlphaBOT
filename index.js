@@ -10,10 +10,19 @@ console.log('[ENV] NODE_VERSION:', process.version);
 const http = require('http');
 console.log('[2] http carregado');
 const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
+
+http.createServer(async (req, res) => {
+  // ── Rotas da API de Auth própria ──────────────────────
+  if (req.url.startsWith('/auth')) {
+    const { handleAuthRequest } = require('./src/authApi');
+    const { getDB } = require('./src/database');
+    const db = await getDB();
+    return handleAuthRequest(req, res, db);
+  }
+  // ── Health check padrão Render ────────────────────────
   res.writeHead(200);
   res.end('AlphaBot online ✅');
-}).listen(PORT, () => console.log(`[3] HTTP na porta ${PORT}`));
+}).listen(PORT, () => console.log(`[3] HTTP na porta ${PORT} | Auth API em /auth`));
 
 console.log('[4] Carregando discord.js...');
 const { Client, GatewayIntentBits, Partials } = require('discord.js');

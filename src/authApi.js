@@ -1,0 +1,280 @@
+/**
+ * authApi.js — API REST de autenticação própria (substitui KeyAuth)
+ * Roda embutida no bot, exposta via HTTP no mesmo processo do Render.
+ *
+ * Endpoints:
+ *   POST /auth/init            → inicializa sessão (equivalente ao KeyAuth init)
+ *   POST /auth/login           → autentica usuário  (equivalente ao KeyAuth login)
+ *   POST /auth/register        → cria usuário       (chamado pelo bot Discord)
+ *   POST /auth/log             → registra log de acesso
+ *   GET  /auth/check/:user     → verifica se usuário existe
+ *   GET  /auth/users           → lista usuários (admin)
+ *   GET  /auth/health          → health check da API
+ *
+ * Integração C# — uso idêntico ao KeyAuth, basta trocar a URL base:
+ *   baseUrl: "https://SEU-BOT.onrender.com"
+ *   secret:  valor de AUTH_BOT_SECRET no .env
+ */
+
+const crypto = require('crypto');
+const fs     = require('fs');
+const path   = require('path');
+
+const DB_PATH = process.env.DB_PATH
+  ? path.resolve(process.env.DB_PATH)
+  : path.join(__dirname, '..', 'data', 'alphabot.db');
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function hashPassword(password) {
+  const salt = process.env.AUTH_SALT || 'alphaxitsalt2024';
+  return crypto.createHash('sha256').update(password + salt).digest('hex');
+}
+
+function generateSession() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function readBody(req) {
+  return new Promise((resolve) => {
+    let data = '';
+    req.on('data', chunk => { data += chunk; });
+    req.on('end', () => {
+      try { resolve(JSON.parse(data)); }
+      catch (_) { resolve({}); }
+    });
+  });
+}
+
+function jsonResponse(res, status, body) {
+  res.writeHead(status, {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*',
+  });
+  res.end(JSON.stringify(body));
+}
+
+// ── Handler principal ────────────────────────────────────────────────────────
+async function handleAuthRequest(req, res, dbInstance) {
+  const url    = req.url.split('?')[0];
+  const method = req.method;
+
+  // CORS preflight
+  if (method === 'OPTIONS') {
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin':  '*',
+      'Access-Control-Allow-Methods': 'GET,POST',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    });
+    return res.end();
+  }
+
+  let body = {};
+  if (method === 'POST') body = await readBody(req);
+
+  // ── Wrappers locais para o sql.js já inicializado ────────────────────────
+  function dbSave() {
+    fs.writeFileSync(DB_PATH, Buffer.from(dbInstance.export()));
+  }
+
+  function dbRun(sql, params = []) {
+    dbInstance.run(sql, params);
+    dbSave();
+  }
+
+  function dbGet(sql, params = []) {
+    const stmt = dbInstance.prepare(sql);
+    stmt.bind(params);
+    let row = null;
+    if (stmt.step()) row = stmt.getAsObject();
+    stmt.free();
+    return row;
+  }
+
+  function dbQuery(sql, params = []) {
+    const stmt = dbInstance.prepare(sql);
+    stmt.bind(params);
+    const rows = [];
+    while (stmt.step()) rows.push(stmt.getAsObject());
+    stmt.free();
+    return rows;
+  }
+
+  // ── GET /auth/health ───────────────────────────────────────────────────────
+  if (url === '/auth/health' && method === 'GET') {
+    const total = dbGet(`SELECT COUNT(*) as c FROM auth_users`)?.c || 0;
+    return jsonResponse(res, 200, {
+      success: true,
+      message: 'Alpha Xit Auth API online',
+      users: total,
+    });
+  }
+
+  // ── POST /auth/init ────────────────────────────────────────────────────────
+  // Equivalente ao KeyAuthApp.init() no C#
+  if (url === '/auth/init' && method === 'POST') {
+    const sessionid = generateSession();
+    const expira    = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+    try {
+      dbRun(
+        `INSERT INTO auth_sessions (sessionid, username, expira_em) VALUES (?,?,?)`,
+        [sessionid, '__init__', expira]
+      );
+    } catch (_) {}
+
+    return jsonResponse(res, 200, {
+      success:    true,
+      sessionid,
+      newSession: true,
+      message:    'Conectado ao servidor. Faça login para continuar.',
+    });
+  }
+
+  // ── POST /auth/login ───────────────────────────────────────────────────────
+  // Equivalente ao KeyAuthApp.login(username, password) no C#
+  if (url === '/auth/login' && method === 'POST') {
+    const { username, password } = body;
+
+    if (!username || !password) {
+      return jsonResponse(res, 400, { success: false, message: 'Preencha usuário e senha!' });
+    }
+
+    const hash = hashPassword(password);
+    const user = dbGet(
+      `SELECT * FROM auth_users WHERE username=? AND password_hash=?`,
+      [username.trim(), hash]
+    );
+
+    if (!user) {
+      return jsonResponse(res, 401, { success: false, message: 'Usuário ou senha incorretos.' });
+    }
+
+    // Verifica expiração
+    if (user.expiry && user.expiry !== 'permanent') {
+      if (new Date(user.expiry) < new Date()) {
+        return jsonResponse(res, 403, {
+          success: false,
+          message: 'Sua licença expirou. Renove seu plano no Discord.',
+        });
+      }
+    }
+
+    dbRun(
+      `UPDATE auth_users SET ultimo_login=datetime('now','localtime') WHERE username=?`,
+      [username.trim()]
+    );
+    dbRun(`INSERT INTO auth_logs (username, acao) VALUES (?,?)`, [username.trim(), 'login']);
+
+    const sessionid = generateSession();
+
+    // Resposta idêntica à estrutura do KeyAuth para máxima compatibilidade no C#
+    return jsonResponse(res, 200, {
+      success:   true,
+      sessionid,
+      message:   'Login efetuado com sucesso!',
+      info: {
+        username:      user.username,
+        ip:            req.socket?.remoteAddress || '',
+        hwid:          '',
+        createdate:    user.criado_em,
+        lastlogin:     user.ultimo_login || user.criado_em,
+        subscriptions: [
+          {
+            subscription: user.plan,
+            expiry:       user.expiry || 'permanent',
+            timeleft:     '',
+          },
+        ],
+      },
+    });
+  }
+
+  // ── POST /auth/register ────────────────────────────────────────────────────
+  // Chamado pelo bot Discord internamente ao aprovar plano
+  if (url === '/auth/register' && method === 'POST') {
+    const { username, password, plan, discord_id, bot_secret } = body;
+
+    if (bot_secret !== (process.env.AUTH_BOT_SECRET || 'alpha_xit_bot_2024')) {
+      return jsonResponse(res, 403, { success: false, message: 'Acesso não autorizado.' });
+    }
+
+    if (!username || !password) {
+      return jsonResponse(res, 400, { success: false, message: 'Usuário e senha obrigatórios.' });
+    }
+
+    if (!/^[a-zA-Z0-9_.-]{3,32}$/.test(username)) {
+      return jsonResponse(res, 400, {
+        success: false,
+        message: 'Nome de usuário inválido. Use letras, números, _ ou . (3–32 caracteres).',
+      });
+    }
+
+    const existing = dbGet(`SELECT id FROM auth_users WHERE username=?`, [username.trim()]);
+    if (existing) {
+      return jsonResponse(res, 409, { success: false, message: 'Esse nome de usuário já está em uso.' });
+    }
+
+    const planMap = { gratis: 1, mensal: 30, anual: 365, permanente: -1 };
+    const dias    = planMap[plan] ?? 1;
+    let expiry;
+    if (dias === -1) {
+      expiry = 'permanent';
+    } else {
+      const d = new Date();
+      d.setDate(d.getDate() + dias);
+      expiry = d.toISOString();
+    }
+
+    try {
+      dbRun(
+        `INSERT INTO auth_users (username, password_hash, plan, expiry, discord_id) VALUES (?,?,?,?,?)`,
+        [username.trim(), hashPassword(password), plan || 'gratis', expiry, discord_id || null]
+      );
+      dbRun(`INSERT INTO auth_logs (username, acao) VALUES (?,?)`, [username.trim(), 'register']);
+    } catch (err) {
+      return jsonResponse(res, 500, { success: false, message: 'Erro ao criar conta: ' + err.message });
+    }
+
+    return jsonResponse(res, 200, {
+      success:  true,
+      message:  'Conta criada com sucesso!',
+      username: username.trim(),
+      plan:     plan || 'gratis',
+      expiry,
+    });
+  }
+
+  // ── POST /auth/log ─────────────────────────────────────────────────────────
+  // Equivalente ao KeyAuthApp.log(msg) no C#
+  if (url === '/auth/log' && method === 'POST') {
+    const { username, message: msg } = body;
+    if (username) {
+      dbRun(`INSERT INTO auth_logs (username, acao) VALUES (?,?)`, [username, msg || 'log']);
+    }
+    return jsonResponse(res, 200, { success: true });
+  }
+
+  // ── GET /auth/check/:username ──────────────────────────────────────────────
+  if (url.startsWith('/auth/check/') && method === 'GET') {
+    const username = decodeURIComponent(url.replace('/auth/check/', ''));
+    const user = dbGet(
+      `SELECT username, plan, expiry, criado_em FROM auth_users WHERE username=?`,
+      [username]
+    );
+    if (!user) return jsonResponse(res, 404, { success: false, message: 'Usuário não encontrado.' });
+    return jsonResponse(res, 200, { success: true, user });
+  }
+
+  // ── GET /auth/users ────────────────────────────────────────────────────────
+  if (url === '/auth/users' && method === 'GET') {
+    const users = dbQuery(
+      `SELECT username, plan, expiry, discord_id, criado_em, ultimo_login
+       FROM auth_users ORDER BY id DESC LIMIT 100`
+    );
+    return jsonResponse(res, 200, { success: true, count: users.length, users });
+  }
+
+  return jsonResponse(res, 404, { success: false, message: 'Endpoint não encontrado.' });
+}
+
+module.exports = { handleAuthRequest, hashPassword };

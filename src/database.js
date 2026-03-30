@@ -105,6 +105,33 @@ function _createTables() {
     criado_em  TEXT DEFAULT (datetime('now','localtime'))
   )`);
 
+  // ── Tabelas de autenticação própria (substitui KeyAuth) ──────────────────
+  db.run(`CREATE TABLE IF NOT EXISTS auth_users (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    username      TEXT UNIQUE NOT NULL COLLATE NOCASE,
+    password_hash TEXT NOT NULL,
+    plan          TEXT DEFAULT 'gratis',
+    expiry        TEXT,
+    discord_id    TEXT,
+    criado_em     TEXT DEFAULT (datetime('now','localtime')),
+    ultimo_login  TEXT
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS auth_sessions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    sessionid  TEXT UNIQUE NOT NULL,
+    username   TEXT NOT NULL,
+    criado_em  TEXT DEFAULT (datetime('now','localtime')),
+    expira_em  TEXT
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS auth_logs (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    username   TEXT,
+    acao       TEXT,
+    criado_em  TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
   _migrate();
 }
 
@@ -297,8 +324,34 @@ function addLog(guildId, tipo, descricao, autorId = '') {
     [guildId, tipo, descricao, autorId]);
 }
 
+// ── Auth Users (substitui KeyAuth) ───────────────────────
+function authUserExiste(username) {
+  return !!get(`SELECT id FROM auth_users WHERE username=?`, [username]);
+}
+
+function getAuthUser(username) {
+  return get(`SELECT * FROM auth_users WHERE username=?`, [username]);
+}
+
+function getAuthUserByDiscord(discordId) {
+  return get(`SELECT * FROM auth_users WHERE discord_id=?`, [discordId]);
+}
+
+function listarAuthUsers(limite = 100) {
+  return query(
+    `SELECT username, plan, expiry, discord_id, criado_em, ultimo_login
+     FROM auth_users ORDER BY id DESC LIMIT ?`,
+    [limite]
+  );
+}
+
+function totalAuthUsers() {
+  return get(`SELECT COUNT(*) as total FROM auth_users`)?.total || 0;
+}
+
 module.exports = {
   getDB,
+  run, query, get,
   getMsgFixa, saveMsgFixa, deleteMsgFixa,
   registrarMembro, membroExiste, xitIdEmUso, getMembro, totalMembros,
   addProduto, listarProdutos, getProduto, deletarProduto, saveProdutoMsg,
@@ -306,4 +359,5 @@ module.exports = {
   getCarteira, getSaldo, adicionarSaldo, removerSaldo, getExtrato,
   getYTConfig, setYTConfig, updateUltimoVideo,
   addLog,
+  authUserExiste, getAuthUser, getAuthUserByDiscord, listarAuthUsers, totalAuthUsers,
 };

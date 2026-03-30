@@ -3,7 +3,7 @@ const {
   embedBoasVindas, embedRegras, embedRegistro,
   embedXitFree, embedComoComprar, embedLojaCoins,
 } = require('./embeds');
-const { embedKeyAuthPayload, KA_CHANNEL_ID } = require('./modules/keyauth');
+const { embedAuthPayload, AUTH_CHANNEL_ID } = require('./modules/myauth');
 
 const CANAL_NOMES = {
   'boas-vindas'  : '👋・boas-vindas',
@@ -65,7 +65,7 @@ async function seedTodosCanais(guild) {
 
   // Loja de Coins — seed por ID fixo do canal
   await seedCanalById(guild, 'loja-coins', CANAL_LOJA_COINS_ID, () => embedLojaCoins());
-  await seedCanalById(guild, 'keyauth',    KA_CHANNEL_ID,       () => embedKeyAuthPayload());
+  await seedCanalById(guild, 'auth',       AUTH_CHANNEL_ID,     () => embedAuthPayload());
 
   console.log(`[SEED] ✅ Seed concluído!`);
 }

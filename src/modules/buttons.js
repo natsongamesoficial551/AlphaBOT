@@ -4,14 +4,14 @@ const { embedRegistroSucesso, embedJaRegistrado, embedBoasVindasDM,
         embedPIX, embedPedidoConfirmado, embedEntregaProduto,
         embedListaProdutos, embedProduto, embedErro, embedLog,
         embedPIXCoin, embedCoinRecebido, embedSaldoInsuficiente, embedSaldo } = require('../embeds');
-const { handleKeyAuthButton, handleKeyAuthModal } = require('./keyauth');
+const { handleAuthButton, handleAuthModal } = require('./myauth');
 
 async function handleButton(interaction) {
   const { customId, guild, member, user } = interaction;
 
-  // ── KEYAUTH ────────────────────────────────────────────
-  if (customId.startsWith('btn_keyauth') || customId.startsWith('btn_ka_')) {
-    return handleKeyAuthButton(interaction);
+  // ── AUTH PRÓPRIO ────────────────────────────────────────
+  if (customId.startsWith('btn_auth') || customId.startsWith('btn_auth_')) {
+    return handleAuthButton(interaction);
   }
 
   try {
@@ -221,9 +221,9 @@ async function handleButton(interaction) {
 
 // ── MODAL SUBMIT — XIT ID ───────────────────────────────
 async function handleModal(interaction) {
-  // ── KEYAUTH MODALS ─────────────────────────────────────
-  if (interaction.customId.startsWith('modal_ka_')) {
-    return handleKeyAuthModal(interaction);
+  // ── AUTH PRÓPRIO MODALS ────────────────────────────────
+  if (interaction.customId.startsWith('modal_auth_')) {
+    return handleAuthModal(interaction);
   }
 
   if (interaction.customId !== 'modal_registro') return;
