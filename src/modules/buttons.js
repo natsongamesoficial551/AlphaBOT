@@ -4,9 +4,15 @@ const { embedRegistroSucesso, embedJaRegistrado, embedBoasVindasDM,
         embedPIX, embedPedidoConfirmado, embedEntregaProduto,
         embedListaProdutos, embedProduto, embedErro, embedLog,
         embedPIXCoin, embedCoinRecebido, embedSaldoInsuficiente, embedSaldo } = require('../embeds');
+const { handleKeyAuthButton, handleKeyAuthModal } = require('./keyauth');
 
 async function handleButton(interaction) {
   const { customId, guild, member, user } = interaction;
+
+  // ── KEYAUTH ────────────────────────────────────────────
+  if (customId.startsWith('btn_keyauth') || customId.startsWith('btn_ka_')) {
+    return handleKeyAuthButton(interaction);
+  }
 
   try {
 
@@ -215,6 +221,11 @@ async function handleButton(interaction) {
 
 // ── MODAL SUBMIT — XIT ID ───────────────────────────────
 async function handleModal(interaction) {
+  // ── KEYAUTH MODALS ─────────────────────────────────────
+  if (interaction.customId.startsWith('modal_ka_')) {
+    return handleKeyAuthModal(interaction);
+  }
+
   if (interaction.customId !== 'modal_registro') return;
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });

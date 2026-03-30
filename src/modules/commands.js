@@ -2,11 +2,17 @@ const { SlashCommandBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilde
 const db = require('../database');
 const { embedProduto, embedProdutoFree, embedListaProdutos, embedPedidosAbertos, embedErro, embedSucesso, embedLog,
         embedPedidoConfirmado, embedEntregaProduto, embedSaldo, embedExtrato, embedCoinRecebido } = require('../embeds');
+const { enviarEmbedKeyAuth, KA_CHANNEL_ID } = require('./keyauth');
 
 const CANAL_PAGO_ID = '1484718869716140163';
 const CANAL_FREE_ID = '1484718898413703270';
 
 const commands = [
+
+  new SlashCommandBuilder()
+    .setName('keyauth-setup')
+    .setDescription('Envia o embed de criação de conta KeyAuth no canal configurado')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles),
 
   new SlashCommandBuilder()
     .setName('produto-add')
@@ -424,6 +430,17 @@ async function handleCommand(interaction) {
       const { embedPacotesMoeda } = require('../embeds');
       const { embed, row } = embedPacotesMoeda();
       return interaction.editReply({ embeds: [embed], components: [row] });
+    }
+
+    // ── /keyauth-setup ────────────────────────────────────
+    if (commandName === 'keyauth-setup') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const channel = interaction.guild.channels.cache.get(KA_CHANNEL_ID);
+      if (!channel) {
+        return interaction.editReply({ embeds: [embedErro(`Canal KeyAuth não encontrado! ID: \`${KA_CHANNEL_ID}\``)] });
+      }
+      await enviarEmbedKeyAuth(channel);
+      return interaction.editReply({ embeds: [{ color: 0x2ECC71, description: `✅ Embed KeyAuth enviado em <#${KA_CHANNEL_ID}>!` }] });
     }
 
   } catch (err) {
