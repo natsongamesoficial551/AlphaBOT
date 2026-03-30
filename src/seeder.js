@@ -80,13 +80,14 @@ async function seedCanalById(guild, tipo, canalId, buildFn) {
   const existing = getMsgFixa(guild.id, tipo);
   if (existing) {
     try {
-      await canal.messages.fetch(existing.message_id);
-      console.log(`[SEED] ✓ ${tipo} já existe — skip`);
-      return;
+      // Tenta apagar a mensagem antiga para mandar uma nova limpa
+      const oldMsg = await canal.messages.fetch(existing.message_id);
+      await oldMsg.delete();
+      console.log(`[SEED] 🗑️ ${tipo} antiga deletada, reenviando...`);
     } catch {
-      deleteMsgFixa(guild.id, tipo);
-      console.log(`[SEED] ↻ ${tipo} sumiu, reenviando...`);
+      console.log(`[SEED] ↻ ${tipo} mensagem antiga não encontrada, reenviando...`);
     }
+    deleteMsgFixa(guild.id, tipo);
   }
 
   const payload = buildFn();
@@ -100,7 +101,7 @@ async function seedCanalById(guild, tipo, canalId, buildFn) {
   }
 
   saveMsgFixa(guild.id, canal.id, tipo, msg.id);
-  console.log(`[SEED] ✅ ${tipo} enviado no canal ${canalId}`);
+  console.log(`[SEED] ✅ ${tipo} enviado no canal ${canalId} (${msg.id})`);
 }
 
 module.exports = { seedTodosCanais };

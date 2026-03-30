@@ -47,6 +47,7 @@ client.once('ready', async () => {
   const { registerCommands }   = require('./src/registerCommands');
   const { startYouTubePoller } = require('./src/modules/youtube');
   const { startAutoPing }      = require('./src/modules/ping');
+  const { startExpiryPoller }  = require('./src/modules/expiry');
 
   console.log('[8] Módulos importados');
 
@@ -66,6 +67,7 @@ client.once('ready', async () => {
 
   startYouTubePoller(client);
   startAutoPing();
+  startExpiryPoller(client);
   console.log('[12] 🚀 Bot 100% pronto!');
 });
 
