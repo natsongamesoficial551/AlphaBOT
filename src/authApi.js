@@ -133,7 +133,7 @@ async function handleAuthRequest(req, res, dbInstance) {
   // ── POST /auth/login ───────────────────────────────────────────────────────
   // Equivalente ao KeyAuthApp.login(username, password) no C#
   if (url === '/auth/login' && method === 'POST') {
-    const { username, password } = body;
+    const { username, password, hwid } = body;
 
     if (!username || !password) {
       return jsonResponse(res, 400, { success: false, message: 'Preencha usuário e senha!' });
@@ -159,6 +159,34 @@ async function handleAuthRequest(req, res, dbInstance) {
       }
     }
 
+    // ── HWID: vincula na 1ª vez, bloqueia se PC diferente ───────────────────
+    if (hwid) {
+      if (!user.hwid) {
+        // Primeira vez logando — vincula o PC
+        dbRun(`UPDATE auth_users SET hwid=? WHERE username=?`, [hwid, username.trim()]);
+        console.log(`[AUTH] HWID vinculado para ${username}`);
+      } else if (user.hwid !== hwid) {
+        // PC diferente — bloqueia e alerta via DM no Discord
+        dbRun(
+          `UPDATE auth_users SET hwid_tentativas = hwid_tentativas + 1 WHERE username=?`,
+          [username.trim()]
+        );
+        dbRun(`INSERT INTO auth_logs (username, acao) VALUES (?,?)`,
+          [username.trim(), `hwid_bloqueado_${hwid.substring(0, 8)}`]
+        );
+
+        // Envia DM para o dono da conta avisando a tentativa
+        if (user.discord_id) {
+          _enviarDMHwidAlerta(user, hwid).catch(() => {});
+        }
+
+        return jsonResponse(res, 403, {
+          success: false,
+          message: 'Este software já está vinculado a outro computador. Contate o suporte no Discord.',
+        });
+      }
+    }
+
     dbRun(
       `UPDATE auth_users SET ultimo_login=datetime('now','localtime') WHERE username=?`,
       [username.trim()]
@@ -175,7 +203,7 @@ async function handleAuthRequest(req, res, dbInstance) {
       info: {
         username:      user.username,
         ip:            req.socket?.remoteAddress || '',
-        hwid:          '',
+        hwid:          user.hwid || hwid || '',
         createdate:    user.criado_em,
         lastlogin:     user.ultimo_login || user.criado_em,
         subscriptions: [
@@ -268,13 +296,99 @@ async function handleAuthRequest(req, res, dbInstance) {
   // ── GET /auth/users ────────────────────────────────────────────────────────
   if (url === '/auth/users' && method === 'GET') {
     const users = dbQuery(
-      `SELECT username, plan, expiry, discord_id, criado_em, ultimo_login
+      `SELECT username, plan, expiry, discord_id, hwid, criado_em, ultimo_login
        FROM auth_users ORDER BY id DESC LIMIT 100`
     );
     return jsonResponse(res, 200, { success: true, count: users.length, users });
   }
 
+  // ── POST /auth/hwid-check ──────────────────────────────────────────────────
+  // C# chama isso antes do registro para ver se o PC já tem conta
+  if (url === '/auth/hwid-check' && method === 'POST') {
+    const { hwid, discord_id } = body;
+    if (!hwid) return jsonResponse(res, 400, { success: false, message: 'HWID obrigatório.' });
+
+    const user = dbGet(`SELECT username, plan, expiry, discord_id FROM auth_users WHERE hwid=?`, [hwid]);
+    if (user) {
+      // PC já tem conta — notifica via DM se discord_id fornecido
+      if (discord_id && discord_id !== user.discord_id) {
+        _enviarDMHwidTentativaCriar({ ...user, hwid }, discord_id).catch(() => {});
+      }
+      return jsonResponse(res, 409, {
+        success: false,
+        message: 'Este computador já possui uma conta registrada. Acesse com suas credenciais.',
+        bloqueado: true,
+      });
+    }
+    return jsonResponse(res, 200, { success: true, message: 'PC liberado para registro.' });
+  }
+
   return jsonResponse(res, 404, { success: false, message: 'Endpoint não encontrado.' });
+}
+
+// ── DM: alerta de tentativa de login em PC diferente ────────────────────────
+async function _enviarDMHwidAlerta(user, hwidTentativa) {
+  try {
+    const { Client } = require('discord.js');
+    // Acessa o client global exposto no processo
+    const client = global._discordClient;
+    if (!client) return;
+
+    const discordUser = await client.users.fetch(user.discord_id);
+    const { EmbedBuilder } = require('discord.js');
+
+    await discordUser.send({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0xE74C3C)
+          .setTitle('🚨 Tentativa de login em outro PC detectada!')
+          .setDescription(
+            `Alguém tentou fazer login na sua conta **Alpha Xit** em um computador diferente!\n\n` +
+            `> 👤 **Sua conta:** \`${user.username}\`\n` +
+            `> 🖥️ **PC bloqueado:** \`${hwidTentativa.substring(0, 16)}...\`\n` +
+            `> 🕐 **Horário:** ${new Date().toLocaleString('pt-BR')}\n\n` +
+            `**Se não foi você**, sua senha está segura mas fique atento.\n` +
+            `**Se foi você** e quer trocar de PC, contate o **staff** no Discord.`
+          )
+          .setFooter({ text: 'Alpha Xit Auth • Segurança' })
+          .setTimestamp(),
+      ],
+    });
+  } catch (_) {}
+}
+
+// ── DM: avisa o dono quando outro Discord tenta criar conta no mesmo PC ──────
+async function _enviarDMHwidTentativaCriar(user, discordIdTentativa) {
+  try {
+    const client = global._discordClient;
+    if (!client || !user.discord_id) return;
+
+    const discordUser = await client.users.fetch(user.discord_id);
+    const { EmbedBuilder } = require('discord.js');
+
+    await discordUser.send({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0xF39C12)
+          .setTitle('⚠️ Alguém tentou criar uma conta no seu PC!')
+          .setDescription(
+            `Um usuário diferente tentou criar uma nova conta no **mesmo computador** que a sua conta está vinculada.\n\n` +
+            `> 👤 **Sua conta:** \`${user.username}\`\n` +
+            `> 📦 **Seu plano:** ${_nomePlano(user.plan)}\n` +
+            `> 🕐 **Horário:** ${new Date().toLocaleString('pt-BR')}\n\n` +
+            `O registro foi **bloqueado automaticamente**.\n` +
+            `Se você quer ceder seu acesso ou trocar de PC, contate o **staff**.`
+          )
+          .setFooter({ text: 'Alpha Xit Auth • Segurança' })
+          .setTimestamp(),
+      ],
+    });
+  } catch (_) {}
+}
+
+function _nomePlano(plan) {
+  const nomes = { gratis: '🆓 Grátis', mensal: '📅 Mensal', anual: '📆 Anual', permanente: '♾️ Permanente' };
+  return nomes[plan] || plan;
 }
 
 module.exports = { handleAuthRequest, hashPassword };

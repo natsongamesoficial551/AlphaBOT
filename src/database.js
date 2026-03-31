@@ -145,6 +145,9 @@ function _migrate() {
     { table: 'produtos',  column: 'message_id',   def: `TEXT` },
     { table: 'produtos',  column: 'canal_id',     def: `TEXT` },
     { table: 'membros',   column: 'xit_id',       def: `TEXT` },
+    // HWID — vincula conta ao PC (CPU ID + MAC)
+    { table: 'auth_users', column: 'hwid',         def: `TEXT` },
+    { table: 'auth_users', column: 'hwid_tentativas', def: `INTEGER DEFAULT 0` },
   ];
 
   for (const m of migrations) {
@@ -337,9 +340,21 @@ function getAuthUserByDiscord(discordId) {
   return get(`SELECT * FROM auth_users WHERE discord_id=?`, [discordId]);
 }
 
+function getAuthUserByHwid(hwid) {
+  return get(`SELECT * FROM auth_users WHERE hwid=?`, [hwid]);
+}
+
+function setAuthHwid(username, hwid) {
+  run(`UPDATE auth_users SET hwid=? WHERE username=?`, [hwid, username]);
+}
+
+function incrementHwidTentativa(hwid) {
+  run(`UPDATE auth_users SET hwid_tentativas = hwid_tentativas + 1 WHERE hwid=?`, [hwid]);
+}
+
 function listarAuthUsers(limite = 100) {
   return query(
-    `SELECT username, plan, expiry, discord_id, criado_em, ultimo_login
+    `SELECT username, plan, expiry, discord_id, hwid, criado_em, ultimo_login
      FROM auth_users ORDER BY id DESC LIMIT ?`,
     [limite]
   );
@@ -359,5 +374,7 @@ module.exports = {
   getCarteira, getSaldo, adicionarSaldo, removerSaldo, getExtrato,
   getYTConfig, setYTConfig, updateUltimoVideo,
   addLog,
-  authUserExiste, getAuthUser, getAuthUserByDiscord, listarAuthUsers, totalAuthUsers,
+  authUserExiste, getAuthUser, getAuthUserByDiscord, getAuthUserByHwid,
+  setAuthHwid, incrementHwidTentativa,
+  listarAuthUsers, totalAuthUsers,
 };

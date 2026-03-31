@@ -41,6 +41,7 @@ console.log('[6] Client criado');
 
 client.once('ready', async () => {
   console.log(`[7] ✅ READY! Bot: ${client.user.tag}`);
+  global._discordClient = client; // expõe para authApi enviar DMs
 
   const { getDB }              = require('./src/database');
   const { seedTodosCanais }    = require('./src/seeder');

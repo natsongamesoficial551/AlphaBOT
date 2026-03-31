@@ -222,61 +222,33 @@ async function handleModalAuthCriar(interaction, plano) {
 
     // ── PLANOS PAGOS: envia para staff confirmar ─────────────────────────────
     } else {
-      const pixKey  = process.env.PIX_KEY  || 'Contate o suporte';
-      const pixName = process.env.PIX_NAME || "Borgesnatan09's Application";
+      // ── PLANOS PAGOS: redireciona para canal de suporte ──────────────────
+      const canalSuporte = process.env.AUTH_SUPORTE_CANAL || '❓・auth-id-duvidas';
+      const guild = interaction.guild;
 
-      const guild  = interaction.guild;
-      const chLog  = guild?.channels.cache.get(AUTH_CHANNEL_ID)
-                  || guild?.channels.cache.find(c => c.name === '📋・bot-logs');
+      // Tenta achar pelo nome configurado
+      const chSuporte = guild?.channels.cache.find(c =>
+        c.name === canalSuporte || c.name.includes('auth-id-duvidas') || c.name.includes('suporte')
+      );
 
-      if (chLog) {
-        // Senha codificada em base64 para passar no customId
-        const passB64 = Buffer.from(password).toString('base64');
-
-        const rowAdmin = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`btn_auth_aprovar_${interaction.user.id}_${plano}_${username}_${passB64}`)
-            .setLabel('✅ Aprovar & Criar Conta')
-            .setStyle(ButtonStyle.Success),
-          new ButtonBuilder()
-            .setCustomId(`btn_auth_rejeitar_${interaction.user.id}`)
-            .setLabel('❌ Rejeitar')
-            .setStyle(ButtonStyle.Danger),
-        );
-
-        await chLog.send({
-          embeds: [new EmbedBuilder()
-            .setColor(0xF39C12)
-            .setTitle('💰 Novo Pedido Auth — Aguardando Pagamento')
-            .setDescription(
-              `> 👤 **Discord:** <@${interaction.user.id}> (${interaction.user.tag})\n` +
-              `> 🔑 **Usuário:** \`${username}\`\n` +
-              `> 📦 **Plano:** ${cfg.label}\n` +
-              `> 💵 **Valor:** R$ ${cfg.preco},00\n` +
-              `> ⏳ **Duração:** ${cfg.dias === -1 ? 'Permanente' : `${cfg.dias} dias`}\n\n` +
-              `Após confirmar o pagamento, clique em **✅ Aprovar**.`
-            )
-            .setTimestamp()
-          ],
-          components: [rowAdmin],
-        });
-      }
+      const mencionCanal = chSuporte ? `<#${chSuporte.id}>` : `**#${canalSuporte}**`;
 
       await interaction.editReply({
         embeds: [new EmbedBuilder()
-          .setColor(0xF39C12)
-          .setTitle('💰 Instruções de Pagamento')
+          .setColor(0x5865F2)
+          .setTitle(`${cfg.emoji} Plano ${cfg.label}`)
           .setDescription(
-            `✅ Pedido registrado para o plano **${cfg.label}**!\n\n` +
-            `**Pague via PIX:**\n` +
-            `> 🔑 **Chave PIX:** \`${pixKey}\`\n` +
-            `> 👤 **Nome:** ${pixName}\n` +
+            `Para adquirir o plano **${cfg.label}**, você precisa falar com o **staff**!\n\n` +
+            `> 📩 Vá até o canal ${mencionCanal}\n` +
+            `> 💬 Informe o plano desejado e aguarde um staff te atender\n` +
+            `> ✅ Após confirmação do pagamento, sua conta será criada pelo staff\n\n` +
+            `**O que você já escolheu:**\n` +
+            `> 👤 **Usuário desejado:** \`${username}\`\n` +
+            `> 📦 **Plano:** ${cfg.label}\n` +
             `> 💵 **Valor:** R$ ${cfg.preco},00\n\n` +
-            `Após o pagamento, **aguarde a confirmação do staff**.\n` +
-            `Sua conta será criada automaticamente!\n\n` +
-            `> ⚠️ Envie o comprovante no chat de suporte.`
+            `> ⚠️ Leve essas informações ao canal de suporte!`
           )
-          .setFooter({ text: `${cfg.label} • Alpha Xit Auth` })
+          .setFooter({ text: 'Alpha Xit Auth • Atendimento via staff' })
           .setTimestamp()
         ],
       });

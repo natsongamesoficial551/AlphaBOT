@@ -1,17 +1,22 @@
 /*
- * MyAuth.cs — Substituto do KeyAuth para Alpha Xit
+ * MyAuth.cs — Sistema de autenticação própria Alpha Xit
  * 
- * Uso idêntico ao KeyAuth original. Apenas troque:
- *   using KeyAuth;  →  using MyAuth;
- *   new api(name, ownerid, secret, version)
- *     →  new api(name, baseUrl, secret, version)
+ * Funcionalidades:
+ *   ✅ Login com usuário + senha
+ *   ✅ HWID (CPU ID + MAC Address) — 1 conta por PC
+ *   ✅ Verificação de HWID antes de criar conta
+ *   ✅ DM no Discord ao detectar tentativa em outro PC
+ *   ✅ Verificação de expiração de licença
+ *   ✅ Log de acesso
  *
- * ─── Configuração no Form1.cs (substitua o bloco KeyAuth) ────────────────────
- * 
+ * ─── Configuração no Form1.cs ────────────────────────────────────────────────
+ *
+ *   using MyAuth;
+ *
  *   public static api MyAuthApp = new api(
  *       name:    "Borgesnatan09's Application",
- *       baseUrl: "https://SEU-BOT.onrender.com",   // URL do seu bot no Render
- *       secret:  "alpha_xit_bot_2024",              // AUTH_BOT_SECRET do .env
+ *       baseUrl: "https://alphabot-ywqw.onrender.com",
+ *       secret:  "alpha_xit_bot_2024",
  *       version: "1.0"
  *   );
  *
@@ -31,20 +36,36 @@
  *       Application.Exit();
  *   }
  *
- * ─── No RealizarLogin(): ─────────────────────────────────────────────────────
+ * ─── No RealizarLogin() — IDÊNTICO ao KeyAuth: ───────────────────────────────
  *
  *   MyAuthApp.login(Username.Text.Trim(), Pass.Text.Trim());
  *   if (MyAuthApp.response.success) {
- *       status.Text = "Bem-vindo " + MyAuthApp.user_data.username + "!";
+ *       statusLogin.Text = "Login efetuado com sucesso!";
+ *       l1.Visible = false;
+ *       l1.SendToBack();
+ *       p1.BringToFront();
+ *       status.Text = "Bem-vindo " + MyAuthApp.user_data.username + "! Painel pronto para uso.";
  *       MyAuthApp.log($"Usuário {MyAuthApp.user_data.username} acessou o painel");
+ *   } else {
+ *       statusLogin.Text = MyAuthApp.response.message;
+ *   }
+ *
+ * ─── Botão Entrar — IDÊNTICO ao KeyAuth: ─────────────────────────────────────
+ *
+ *   private void lczxy7AnimatedButton11_Click(object sender, EventArgs e)
+ *   {
+ *       RealizarLogin();
  *   }
  */
 
 using System;
 using System.Collections.Generic;
+using System.Management;          // para CPU ID — adicione referência: System.Management
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Text;
 using System.IO;
+using System.Security.Cryptography;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -54,20 +75,13 @@ namespace MyAuth
     {
         // ── Configuração ─────────────────────────────────────────────────────
         private readonly string name;
-        private readonly string baseUrl;    // ex: "https://seu-bot.onrender.com"
-        private readonly string secret;     // AUTH_BOT_SECRET do .env do bot
+        private readonly string baseUrl;
+        private readonly string secret;
         private readonly string version;
 
-        private bool initialized = false;
+        private bool   initialized = false;
+        private string _hwid       = null;
 
-        /// <summary>
-        /// Cria uma instância da API de autenticação própria.
-        /// Uso idêntico ao KeyAuth original — basta trocar ownerid/secret por baseUrl/secret.
-        /// </summary>
-        /// <param name="name">Nome da aplicação</param>
-        /// <param name="baseUrl">URL base do bot no Render (ex: https://meubot.onrender.com)</param>
-        /// <param name="secret">AUTH_BOT_SECRET configurado no .env do bot</param>
-        /// <param name="version">Versão da aplicação</param>
         public api(string name, string baseUrl, string secret, string version)
         {
             this.name    = name;
@@ -113,6 +127,9 @@ namespace MyAuth
         {
             try
             {
+                // Gera o HWID na inicialização (CPU ID + MAC Address)
+                _hwid = GetHWID();
+
                 var payload = new { version = this.version };
                 var json    = Post("/auth/init", payload);
                 var obj     = JObject.Parse(json);
@@ -131,7 +148,7 @@ namespace MyAuth
         }
 
         /// <summary>
-        /// Autentica o usuário.
+        /// Autentica o usuário com verificação de HWID.
         /// Idêntico ao KeyAuthApp.login(username, password)
         /// </summary>
         public void login(string username, string password)
@@ -139,9 +156,15 @@ namespace MyAuth
             CheckInit();
             try
             {
-                var payload = new { username, password };
-                var json    = Post("/auth/login", payload);
-                var obj     = JObject.Parse(json);
+                var payload = new
+                {
+                    username,
+                    password,
+                    hwid = _hwid ?? GetHWID(),
+                };
+
+                var json = Post("/auth/login", payload);
+                var obj  = JObject.Parse(json);
 
                 response.success = obj["success"]?.Value<bool>() ?? false;
                 response.message = obj["message"]?.Value<string>() ?? "Erro desconhecido";
@@ -197,7 +220,81 @@ namespace MyAuth
                 var payload = new { username = user_data.username, message };
                 Post("/auth/log", payload);
             }
-            catch { /* log falhou silenciosamente */ }
+            catch { }
+        }
+
+        // ── HWID ─────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Gera um identificador único do PC baseado em CPU ID + MAC Address.
+        /// Resultado é hash SHA256 para não expor dados brutos.
+        /// </summary>
+        public static string GetHWID()
+        {
+            try
+            {
+                string cpuId  = GetCpuId();
+                string macAdr = GetMacAddress();
+                string raw    = $"ALPHAXITHWID|{cpuId}|{macAdr}";
+
+                using (var sha256 = SHA256.Create())
+                {
+                    byte[] bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(raw));
+                    var sb = new StringBuilder();
+                    foreach (byte b in bytes)
+                        sb.AppendFormat("{0:x2}", b);
+                    return sb.ToString();
+                }
+            }
+            catch
+            {
+                // Fallback: usa nome da máquina + nome do usuário do Windows
+                string raw = $"ALPHAXITHWID_FALLBACK|{Environment.MachineName}|{Environment.UserName}";
+                using (var sha256 = SHA256.Create())
+                {
+                    byte[] bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(raw));
+                    var sb = new StringBuilder();
+                    foreach (byte b in bytes)
+                        sb.AppendFormat("{0:x2}", b);
+                    return sb.ToString();
+                }
+            }
+        }
+
+        private static string GetCpuId()
+        {
+            try
+            {
+                using (var searcher = new ManagementObjectSearcher("SELECT ProcessorId FROM Win32_Processor"))
+                {
+                    foreach (ManagementObject obj in searcher.Get())
+                    {
+                        var id = obj["ProcessorId"]?.ToString();
+                        if (!string.IsNullOrWhiteSpace(id)) return id.Trim();
+                    }
+                }
+            }
+            catch { }
+            return "NOCPU";
+        }
+
+        private static string GetMacAddress()
+        {
+            try
+            {
+                foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (nic.NetworkInterfaceType == NetworkInterfaceType.Ethernet ||
+                        nic.NetworkInterfaceType == NetworkInterfaceType.Wireless80211)
+                    {
+                        var mac = nic.GetPhysicalAddress().ToString();
+                        if (!string.IsNullOrWhiteSpace(mac) && mac != "000000000000")
+                            return mac;
+                    }
+                }
+            }
+            catch { }
+            return "NOMAC";
         }
 
         // ── Helpers internos ─────────────────────────────────────────────────
@@ -213,18 +310,18 @@ namespace MyAuth
             var url     = baseUrl + endpoint;
             var reqBody = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(payload));
 
-            var request = (HttpWebRequest)WebRequest.Create(url);
-            request.Method      = "POST";
-            request.ContentType = "application/json";
-            request.ContentLength = reqBody.Length;
-            request.Timeout     = 15000;
-
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11;
+
+            var request             = (HttpWebRequest)WebRequest.Create(url);
+            request.Method          = "POST";
+            request.ContentType     = "application/json";
+            request.ContentLength   = reqBody.Length;
+            request.Timeout         = 15000;
 
             using (var stream = request.GetRequestStream())
                 stream.Write(reqBody, 0, reqBody.Length);
 
-            using (var resp = (HttpWebResponse)request.GetResponse())
+            using (var resp   = (HttpWebResponse)request.GetResponse())
             using (var reader = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
                 return reader.ReadToEnd();
         }
@@ -235,10 +332,9 @@ namespace MyAuth
             {
                 using (var reader = new StreamReader(errResp.GetResponseStream(), Encoding.UTF8))
                 {
-                    var json = reader.ReadToEnd();
                     try
                     {
-                        var obj = JObject.Parse(json);
+                        var obj = JObject.Parse(reader.ReadToEnd());
                         response.success = false;
                         response.message = obj["message"]?.Value<string>() ?? "Erro no servidor.";
                     }
