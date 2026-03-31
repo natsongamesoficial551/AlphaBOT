@@ -1,5 +1,5 @@
 const initSqlJs = require('sql.js');
-const fs = require('fs');
+const fs   = require('fs');
 const path = require('path');
 
 const DB_PATH = process.env.DB_PATH
@@ -7,17 +7,36 @@ const DB_PATH = process.env.DB_PATH
   : path.join(__dirname, '..', 'data', 'alphabot.db');
 
 let db;
+let _autoSaveStarted = false;
 
 async function getDB() {
   if (db) return db;
   const SQL = await initSqlJs();
   const dir = path.dirname(DB_PATH);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
   db = fs.existsSync(DB_PATH)
     ? new SQL.Database(fs.readFileSync(DB_PATH))
     : new SQL.Database();
+
   _createTables();
   _save();
+
+  // ── Auto-save a cada 60 segundos para garantir persistência ──────────────
+  if (!_autoSaveStarted) {
+    _autoSaveStarted = true;
+    setInterval(() => {
+      try { _save(); } catch (e) { console.error('[DB] Auto-save falhou:', e.message); }
+    }, 60_000);
+    console.log(`[DB] ✅ Banco carregado em: ${DB_PATH}`);
+    if (!process.env.DB_PATH) {
+      console.warn('[DB] ⚠️  DB_PATH não definido! Configure no Render:');
+      console.warn('[DB]    1. Crie um Disk em /data (Render Dashboard → Disks)');
+      console.warn('[DB]    2. Adicione DB_PATH=/data/alphabot.db nas env vars');
+      console.warn('[DB]    Sem isso o banco SOME ao reiniciar o bot!');
+    }
+  }
+
   return db;
 }
 

@@ -242,6 +242,17 @@ async function handleAuthRequest(req, res, dbInstance) {
       return jsonResponse(res, 409, { success: false, message: 'Esse nome de usuário já está em uso.' });
     }
 
+    // Bloqueia se esse discord_id já tem conta (1 conta por Discord)
+    if (discord_id) {
+      const existeDiscord = dbGet(`SELECT username FROM auth_users WHERE discord_id=?`, [discord_id]);
+      if (existeDiscord) {
+        return jsonResponse(res, 409, {
+          success: false,
+          message: `Este Discord já possui a conta \`${existeDiscord.username}\` cadastrada.`,
+        });
+      }
+    }
+
     const planMap = { gratis: 1, mensal: 30, anual: 365, permanente: -1 };
     const dias    = planMap[plan] ?? 1;
     let expiry;

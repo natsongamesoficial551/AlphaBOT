@@ -33,6 +33,11 @@ const PLANOS = {
 // ─── Funções diretas no banco (sem HTTP, mesmo processo) ─────────────────────
 const crypto = require('crypto');
 
+function _nomePlano(plan) {
+  const nomes = { gratis: '🆓 Grátis (24h)', mensal: '📅 Mensal', anual: '📆 Anual', permanente: '♾️ Permanente' };
+  return nomes[plan] || plan;
+}
+
 function hashPassword(password) {
   return crypto.createHash('sha256')
     .update(password + (process.env.AUTH_SALT || 'alphaxitsalt2024'))
@@ -190,6 +195,37 @@ async function handleModalAuthCriar(interaction, plano) {
     });
   }
 
+  // ── BLOQUEIO: 1 conta por Discord ──────────────────────────────────────────
+  // Verifica se esse discord_id já tem conta cadastrada
+  const { getAuthUserByDiscord } = require('../database');
+  const contaExistente = getAuthUserByDiscord(interaction.user.id);
+  if (contaExistente) {
+    // Envia as credenciais via DM (privado, seguro)
+    try {
+      await interaction.user.send({
+        embeds: [new EmbedBuilder()
+          .setColor(0xF39C12)
+          .setTitle('⚠️ Você já possui uma conta cadastrada!')
+          .setDescription(
+            `Sua conta no **Alpha Xit** já foi criada anteriormente.\n\n` +
+            `> 👤 **Usuário:** \`${contaExistente.username}\`\n` +
+            `> 📦 **Plano:** ${_nomePlano(contaExistente.plan)}\n\n` +
+            `Use essas credenciais para acessar o software.\n` +
+            `Se esqueceu sua senha, fale com o **staff** no canal de suporte.`
+          )
+          .setFooter({ text: 'Alpha Xit Auth • Esta mensagem é privada' })
+          .setTimestamp()
+        ],
+      });
+    } catch (_) {}
+
+    return interaction.editReply({
+      embeds: [new EmbedBuilder().setColor(0xF39C12).setDescription(
+        `⚠️ Você já possui uma conta cadastrada!\n\nAs suas credenciais foram enviadas na sua **DM** 📩`
+      )],
+    });
+  }
+
   try {
     // ── PLANO GRÁTIS: cria automaticamente ──────────────────────────────────
     if (cfg.preco === 0) {
@@ -220,9 +256,8 @@ async function handleModalAuthCriar(interaction, plano) {
         ],
       });
 
-    // ── PLANOS PAGOS: envia para staff confirmar ─────────────────────────────
+    // ── PLANOS PAGOS: redireciona para canal de suporte ──────────────────────
     } else {
-      // ── PLANOS PAGOS: redireciona para canal de suporte ──────────────────
       const canalSuporte = process.env.AUTH_SUPORTE_CANAL || '❓・auth-id-duvidas';
       const guild = interaction.guild;
 
