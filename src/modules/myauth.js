@@ -45,10 +45,22 @@ function hashPassword(password) {
 }
 
 function criarContaLocal(username, password, plan, discordId) {
-  // Verifica se já existe
+  // Verifica se username já existe
   const existing = get(`SELECT id FROM auth_users WHERE username=?`, [username]);
   if (existing) {
     return { success: false, message: 'Esse nome de usuário já está em uso.' };
+  }
+
+  // Verifica se esse Discord já tem conta (1 conta por Discord)
+  if (discordId) {
+    const existeDiscord = get(`SELECT username FROM auth_users WHERE discord_id=?`, [discordId]);
+    if (existeDiscord) {
+      return {
+        success: false,
+        message: `Esse Discord já possui a conta \`${existeDiscord.username}\` cadastrada.`,
+        conta_existente: existeDiscord.username,
+      };
+    }
   }
 
   // Calcula expiração

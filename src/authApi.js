@@ -110,11 +110,33 @@ async function handleAuthRequest(req, res, dbInstance) {
   }
 
   // ── POST /auth/init ────────────────────────────────────────────────────────
-  // Equivalente ao KeyAuthApp.init() no C#
+  // C# chama isso ao abrir o software — já verifica HWID aqui
   if (url === '/auth/init' && method === 'POST') {
+    const { hwid } = body;
+
+    // ── Se HWID fornecido, verifica se esse PC já tem conta ─────────────────
+    if (hwid) {
+      const contaVinculada = dbGet(
+        `SELECT username, plan, expiry, discord_id FROM auth_users WHERE hwid=?`,
+        [hwid]
+      );
+
+      if (contaVinculada) {
+        // PC já tem conta — retorna sucesso mas avisa que já existe conta
+        // O C# deve mostrar apenas a tela de LOGIN, nunca de criação
+        const sessionid = generateSession();
+        return jsonResponse(res, 200, {
+          success:       true,
+          sessionid,
+          newSession:    true,
+          hwid_has_account: true,   // flag para o C# esconder botão "Criar Conta"
+          message:       'Conectado ao servidor. Faça login para continuar.',
+        });
+      }
+    }
+
     const sessionid = generateSession();
     const expira    = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-
     try {
       dbRun(
         `INSERT INTO auth_sessions (sessionid, username, expira_em) VALUES (?,?,?)`,
@@ -123,10 +145,11 @@ async function handleAuthRequest(req, res, dbInstance) {
     } catch (_) {}
 
     return jsonResponse(res, 200, {
-      success:    true,
+      success:          true,
       sessionid,
-      newSession: true,
-      message:    'Conectado ao servidor. Faça login para continuar.',
+      newSession:       true,
+      hwid_has_account: false,  // PC livre — pode criar conta
+      message:          'Conectado ao servidor. Faça login para continuar.',
     });
   }
 
