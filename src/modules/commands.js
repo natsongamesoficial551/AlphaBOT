@@ -11,13 +11,20 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('auth-setup')
-    .setDescription('Envia o embed de criação de conta no canal configurado')
+    .setDescription('Envia o embed de solicitação de Auth Key no canal configurado')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles),
 
   new SlashCommandBuilder()
     .setName('auth-usuarios')
-    .setDescription('Lista todos os usuários cadastrados no sistema de auth')
+    .setDescription('Lista todos os usuários com Auth Key aprovada')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles),
+
+  new SlashCommandBuilder()
+    .setName('timeauth')
+    .setDescription('Define a data de expiração total da Auth Key de um usuário')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
+    .addUserOption(o => o.setName('usuario').setDescription('Usuário do Discord').setRequired(true))
+    .addStringOption(o => o.setName('data').setDescription('Data de expiração (DD/MM/AAAA) ou "permanente"').setRequired(true)),
 
   new SlashCommandBuilder()
     .setName('produto-add')
@@ -453,27 +460,91 @@ async function handleCommand(interaction) {
     if (commandName === 'auth-usuarios') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const { listarAuthUsers, totalAuthUsers } = require('../database');
-      const total   = totalAuthUsers();
+      const total    = totalAuthUsers();
       const usuarios = listarAuthUsers(20);
 
       if (!usuarios.length) {
-        return interaction.editReply({ embeds: [embedErro('Nenhum usuário cadastrado ainda.')] });
+        return interaction.editReply({ embeds: [embedErro('Nenhum usuário aprovado ainda.')] });
       }
 
       const linhas = usuarios.map(u => {
-        const expStr = u.expiry === 'permanent' ? '♾️ Permanente'
-          : u.expiry ? `📅 ${new Date(u.expiry).toLocaleDateString('pt-BR')}` : '?';
-        return `\`${u.username}\` — ${u.plan} — ${expStr}${u.discord_id ? ` — <@${u.discord_id}>` : ''}`;
+        const uso = Math.floor((u.uso_segundos || 0) / 3600);
+        const lim = Math.floor((u.limite_segundos || 86400) / 3600);
+        const cooldown = u.cooldown_inicio ? '🔄 Cooldown' : `⏱️ ${uso}h/${lim}h`;
+        const expiry = u.expiry_adm ? `📅 ${new Date(u.expiry_adm).toLocaleDateString('pt-BR')}` : '∞';
+        return `\`${u.username}\` — ${u.discord_tag} — ${cooldown} — ${expiry}`;
       }).join('\n');
 
       const embed = new EmbedBuilder()
         .setColor(0x5865F2)
-        .setTitle(`🔑 Usuários Auth — ${total} cadastrado(s)`)
+        .setTitle(`🔑 Auth Keys Aprovadas — ${total} usuário(s)`)
         .setDescription(linhas.slice(0, 4000))
         .setFooter({ text: 'Mostrando últimos 20 • Alpha Xit Auth' })
         .setTimestamp();
 
       return interaction.editReply({ embeds: [embed] });
+    }
+
+    // ── /timeauth ─────────────────────────────────────────
+    if (commandName === 'timeauth') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      const alvo      = interaction.options.getUser('usuario');
+      const dataStr   = interaction.options.getString('data').trim();
+      const { setExpiryAdm, getAuthUserByDiscord } = require('../database');
+
+      const conta = getAuthUserByDiscord(alvo.id);
+      if (!conta) {
+        return interaction.editReply({ embeds: [embedErro(`<@${alvo.id}> não possui uma Auth Key aprovada.`)] });
+      }
+
+      let dataExpiry = null;
+      let dataLabel  = '';
+
+      if (dataStr.toLowerCase() === 'permanente' || dataStr.toLowerCase() === 'sem') {
+        dataExpiry = null;
+        dataLabel  = '♾️ Permanente (sem expiração)';
+      } else {
+        // Aceita DD/MM/AAAA
+        const partes = dataStr.split('/');
+        if (partes.length !== 3) {
+          return interaction.editReply({ embeds: [embedErro('Formato inválido! Use `DD/MM/AAAA` ou `permanente`.')] });
+        }
+        const [dia, mes, ano] = partes;
+        const d = new Date(`${ano}-${mes.padStart(2,'0')}-${dia.padStart(2,'0')}T23:59:59`);
+        if (isNaN(d.getTime())) {
+          return interaction.editReply({ embeds: [embedErro('Data inválida! Use `DD/MM/AAAA`.')] });
+        }
+        dataExpiry = d.toISOString();
+        dataLabel  = `📅 ${dataStr}`;
+      }
+
+      setExpiryAdm(alvo.id, dataExpiry);
+
+      // Notifica o usuário via DM
+      try {
+        await alvo.send({
+          embeds: [new EmbedBuilder()
+            .setColor(0x5865F2)
+            .setTitle('📅 Sua licença foi atualizada!')
+            .setDescription(
+              `O **staff** atualizou a expiração da sua **Auth Key**.\n\n` +
+              `> ⏳ **Nova expiração:** ${dataLabel}\n\n` +
+              `Suas 24h de uso ativo continuam funcionando normalmente.`
+            )
+            .setFooter({ text: 'Alpha Xit Auth' })
+            .setTimestamp()
+          ],
+        });
+      } catch (_) {}
+
+      await interaction.editReply({
+        embeds: [embedSucesso(
+          `Auth Key de <@${alvo.id}> (\`${conta.username}\`) atualizada!\nNova expiração: **${dataLabel}**`
+        )],
+      });
+      _log(guild, 'admin', `/timeauth aplicado em <@${alvo.id}> — ${dataLabel} por <@${user.id}>`, user.id);
+      return;
     }
 
   } catch (err) {

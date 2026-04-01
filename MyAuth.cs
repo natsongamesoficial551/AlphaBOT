@@ -1,15 +1,17 @@
 /*
- * MyAuth.cs — Sistema de autenticação Alpha Xit
- * 
- * O Form tem APENAS login (conta já foi criada no Discord).
- * HWID (CPU ID + MAC) é enviado no login para vincular o PC à conta.
- * A partir daí, só aquele PC consegue logar naquela conta.
+ * MyAuth.cs — Sistema Auth Key Alpha Xit
  *
- * ─── DEPENDÊNCIA ─────────────────────────────────────────────────────────────
- *   Adicione referência: System.Management
- *   (Projeto → Adicionar Referência → System.Management)
+ * FLUXO:
+ *   1. Pessoa cria conta no Discord (bot)
+ *   2. Staff aprova → Auth Key enviada na DM (formato XXXXXX-XXXXXX-XXXXXX)
+ *   3. Pessoa abre o software, digita Usuário + Senha + Auth Key
+ *   4. 24h de uso ativo (conta só quando o painel está aberto)
+ *   5. Após esgotar as 24h → cooldown de 30 dias, depois renova
  *
- * ─── CONFIGURAÇÃO no Form1.cs ────────────────────────────────────────────────
+ * DEPENDÊNCIA: Adicione referência System.Management no projeto
+ *   Projeto → Adicionar Referência → System.Management
+ *
+ * ─── CONFIGURAÇÃO ────────────────────────────────────────────────────────────
  *
  *   using MyAuth;
  *
@@ -20,7 +22,7 @@
  *       version: "1.0"
  *   );
  *
- * ─── No Form1() (construtor) — IDÊNTICO ao KeyAuth ───────────────────────────
+ * ─── Form1() construtor ───────────────────────────────────────────────────────
  *
  *   public Form1()
  *   {
@@ -32,41 +34,45 @@
  *       if (!MyAuthApp.response.success)
  *           statusLogin.Text = "Erro de conexão: " + MyAuthApp.response.message;
  *       else
- *           statusLogin.Text = "Conectado ao servidor. Faça login para continuar.";
+ *           statusLogin.Text = "Conectado. Insira suas credenciais e Auth Key.";
  *   }
  *
- * ─── No Form1_Load — IDÊNTICO ao KeyAuth ─────────────────────────────────────
+ * ─── Form1_Load ───────────────────────────────────────────────────────────────
  *
  *   private void Form1_Load(object sender, EventArgs e)
  *   {
  *       MyAuthApp.init();
- *       if (!MyAuthApp.response.success)
- *       {
+ *       if (!MyAuthApp.response.success) {
  *           MessageBox.Show(MyAuthApp.response.message);
  *           Application.Exit();
  *       }
  *   }
  *
- * ─── RealizarLogin() — IDÊNTICO ao KeyAuth ───────────────────────────────────
+ * ─── RealizarLogin() ──────────────────────────────────────────────────────────
+ *   // Adicione um campo TextBox chamado AuthKey no seu Form
  *
  *   private void RealizarLogin()
  *   {
- *       if (string.IsNullOrWhiteSpace(Username.Text) || string.IsNullOrWhiteSpace(Pass.Text))
+ *       if (string.IsNullOrWhiteSpace(Username.Text) ||
+ *           string.IsNullOrWhiteSpace(Pass.Text) ||
+ *           string.IsNullOrWhiteSpace(AuthKey.Text))
  *       {
- *           statusLogin.Text = "Preencha usuário e senha!";
+ *           statusLogin.Text = "Preencha usuário, senha e Auth Key!";
  *           return;
  *       }
  *       statusLogin.Text = "Autenticando...";
  *
- *       MyAuthApp.login(Username.Text.Trim(), Pass.Text.Trim());
+ *       MyAuthApp.activate(Username.Text.Trim(), Pass.Text.Trim(), AuthKey.Text.Trim());
  *       if (MyAuthApp.response.success)
  *       {
- *           statusLogin.Text = "Login efetuado com sucesso!";
+ *           statusLogin.Text = "Auth Key ativada!";
  *           l1.Visible = false;
  *           l1.SendToBack();
  *           p1.BringToFront();
- *           status.Text = "Bem-vindo " + MyAuthApp.user_data.username + "! Painel pronto para uso.";
- *           MyAuthApp.log($"Usuário {MyAuthApp.user_data.username} acessou o painel");
+ *           status.Text = "Bem-vindo " + MyAuthApp.user_data.username +
+ *                         "! Tempo restante: " + MyAuthApp.user_data.tempo_restante;
+ *           MyAuthApp.StartHeartbeat();  // ← inicia contagem de uso ativo
+ *           MyAuthApp.log("Usuário " + MyAuthApp.user_data.username + " ativou o painel");
  *       }
  *       else
  *       {
@@ -74,11 +80,12 @@
  *       }
  *   }
  *
- * ─── Botão Entrar — IDÊNTICO ao KeyAuth ──────────────────────────────────────
+ * ─── Quando o Form principal fechar ──────────────────────────────────────────
  *
- *   private void lczxy7AnimatedButton11_Click(object sender, EventArgs e)
+ *   protected override void OnFormClosing(FormClosingEventArgs e)
  *   {
- *       RealizarLogin();
+ *       MyAuthApp.StopHeartbeat();
+ *       base.OnFormClosing(e);
  *   }
  */
 
@@ -90,6 +97,8 @@ using System.Net.NetworkInformation;
 using System.Text;
 using System.IO;
 using System.Security.Cryptography;
+using System.Threading;
+using System.Windows.Forms;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -104,6 +113,8 @@ namespace MyAuth
 
         private bool   initialized = false;
         private string _hwid       = null;
+        private string _authKey    = null;
+        private Timer  _heartbeatTimer = null;
 
         public api(string name, string baseUrl, string secret, string version)
         {
@@ -113,7 +124,7 @@ namespace MyAuth
             this.version = version;
         }
 
-        // ── Estruturas públicas — idênticas ao KeyAuth ────────────────────────
+        // ── Estruturas públicas ───────────────────────────────────────────────
         public response_class  response  = new response_class();
         public user_data_class user_data = new user_data_class();
 
@@ -125,12 +136,13 @@ namespace MyAuth
 
         public class user_data_class
         {
-            public string       username      { get; set; }
-            public string       ip            { get; set; }
-            public string       hwid          { get; set; }
-            public string       createdate    { get; set; }
-            public string       lastlogin     { get; set; }
-            public List<Data>   subscriptions { get; set; }
+            public string       username       { get; set; }
+            public string       nome_completo  { get; set; }
+            public string       auth_key       { get; set; }
+            public string       hwid           { get; set; }
+            public string       createdate     { get; set; }
+            public string       tempo_restante { get; set; }
+            public List<Data>   subscriptions  { get; set; }
         }
 
         public class Data
@@ -140,22 +152,19 @@ namespace MyAuth
             public string timeleft     { get; set; }
         }
 
-        // ── init() — chame no construtor e no Form1_Load ──────────────────────
+        // ── init() ────────────────────────────────────────────────────────────
         public void init()
         {
             try
             {
                 _hwid = GetHWID();
-
-                var payload = new { version = this.version, hwid = _hwid };
-                var json    = Post("/auth/init", payload);
-                var obj     = JObject.Parse(json);
+                var json = Post("/auth/init", new { version = this.version, hwid = _hwid });
+                var obj  = JObject.Parse(json);
 
                 response.success = obj["success"]?.Value<bool>() ?? false;
                 response.message = obj["message"]?.Value<string>() ?? "Erro desconhecido";
 
-                if (response.success)
-                    initialized = true;
+                if (response.success) initialized = true;
             }
             catch (Exception ex)
             {
@@ -164,23 +173,17 @@ namespace MyAuth
             }
         }
 
-        // ── login() — envia HWID junto, servidor vincula PC à conta ──────────
-        // Na 1ª vez: HWID é salvo e vinculado à conta
-        // Nas próximas: se o HWID for diferente, bloqueia e manda DM no Discord
-        public void login(string username, string password)
+        // ── activate() — envia user + senha + auth_key ────────────────────────
+        public void activate(string username, string password, string authKey)
         {
             CheckInit();
             try
             {
-                var payload = new
-                {
-                    username,
-                    password,
-                    hwid = _hwid ?? GetHWID(),
-                };
+                _authKey = authKey.Trim().ToUpper();
 
-                var json = Post("/auth/login", payload);
-                var obj  = JObject.Parse(json);
+                var payload = new { username, password, auth_key = _authKey, hwid = _hwid ?? GetHWID() };
+                var json    = Post("/auth/activate", payload);
+                var obj     = JObject.Parse(json);
 
                 response.success = obj["success"]?.Value<bool>() ?? false;
                 response.message = obj["message"]?.Value<string>() ?? "Erro desconhecido";
@@ -190,18 +193,18 @@ namespace MyAuth
                     var info = obj["info"];
                     if (info != null)
                     {
-                        user_data.username   = info["username"]?.Value<string>();
-                        user_data.ip         = info["ip"]?.Value<string>();
-                        user_data.hwid       = info["hwid"]?.Value<string>();
-                        user_data.createdate = info["createdate"]?.Value<string>();
-                        user_data.lastlogin  = info["lastlogin"]?.Value<string>();
+                        user_data.username      = info["username"]?.Value<string>();
+                        user_data.nome_completo = info["nome_completo"]?.Value<string>();
+                        user_data.auth_key      = info["auth_key"]?.Value<string>();
+                        user_data.hwid          = info["hwid"]?.Value<string>();
+                        user_data.createdate    = info["createdate"]?.Value<string>();
+                        user_data.tempo_restante = info["tempo_restante"]?.Value<string>();
 
                         var subs = info["subscriptions"] as JArray;
                         user_data.subscriptions = new List<Data>();
                         if (subs != null)
                             foreach (var s in subs)
-                                user_data.subscriptions.Add(new Data
-                                {
+                                user_data.subscriptions.Add(new Data {
                                     subscription = s["subscription"]?.Value<string>(),
                                     expiry       = s["expiry"]?.Value<string>(),
                                     timeleft     = s["timeleft"]?.Value<string>(),
@@ -210,19 +213,61 @@ namespace MyAuth
                 }
             }
             catch (WebException wex) { HandleWebException(wex); }
-            catch (Exception ex)
-            {
-                response.success = false;
-                response.message = "Erro: " + ex.Message;
-            }
+            catch (Exception ex) { response.success = false; response.message = ex.Message; }
         }
 
-        // ── log() — registra acesso, idêntico ao KeyAuth ─────────────────────
+        // ── StartHeartbeat() — chame após login bem-sucedido ─────────────────
+        // Envia heartbeat a cada 60s para contar o tempo de uso ativo
+        public void StartHeartbeat()
+        {
+            if (_authKey == null || _heartbeatTimer != null) return;
+
+            _heartbeatTimer = new Timer(state =>
+            {
+                try
+                {
+                    var json = Post("/auth/heartbeat", new { auth_key = _authKey });
+                    var obj  = JObject.Parse(json);
+
+                    bool ok = obj["success"]?.Value<bool>() ?? false;
+
+                    if (!ok)
+                    {
+                        string msg = obj["message"]?.Value<string>() ?? "";
+                        bool esgotado = obj["esgotado"]?.Value<bool>() ?? false;
+
+                        StopHeartbeat();
+
+                        // Fecha o software na thread da UI
+                        Application.Invoke(() => {
+                            MessageBox.Show(
+                                esgotado
+                                    ? "Suas 24 horas foram utilizadas!\n\nCooldown de 30 dias iniciado.\nO software será encerrado."
+                                    : msg,
+                                "Alpha Xit — Sessão encerrada",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Warning
+                            );
+                            Application.Exit();
+                        });
+                    }
+                }
+                catch { /* falha silenciosa no heartbeat */ }
+            }, null, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(60));
+        }
+
+        // ── StopHeartbeat() — chame quando o Form fechar ─────────────────────
+        public void StopHeartbeat()
+        {
+            _heartbeatTimer?.Dispose();
+            _heartbeatTimer = null;
+        }
+
+        // ── log() ─────────────────────────────────────────────────────────────
         public void log(string message)
         {
             if (!initialized || user_data?.username == null) return;
-            try { Post("/auth/log", new { username = user_data.username, message }); }
-            catch { }
+            try { Post("/auth/log", new { username = user_data.username, message }); } catch { }
         }
 
         // ── HWID: CPU ID + MAC Address → SHA256 ───────────────────────────────
@@ -230,15 +275,12 @@ namespace MyAuth
         {
             try
             {
-                string cpu = GetCpuId();
-                string mac = GetMacAddress();
-                string raw = $"ALPHAXITHWID|{cpu}|{mac}";
-
+                string raw = $"ALPHAXITHWID|{GetCpuId()}|{GetMacAddress()}";
                 using (var sha = SHA256.Create())
                 {
-                    var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(raw));
-                    var sb    = new StringBuilder();
-                    foreach (var b in bytes) sb.AppendFormat("{0:x2}", b);
+                    var b = sha.ComputeHash(Encoding.UTF8.GetBytes(raw));
+                    var sb = new StringBuilder();
+                    foreach (var x in b) sb.AppendFormat("{0:x2}", x);
                     return sb.ToString();
                 }
             }
@@ -247,9 +289,9 @@ namespace MyAuth
                 string raw = $"ALPHAXITHWID_FB|{Environment.MachineName}|{Environment.UserName}";
                 using (var sha = SHA256.Create())
                 {
-                    var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(raw));
-                    var sb    = new StringBuilder();
-                    foreach (var b in bytes) sb.AppendFormat("{0:x2}", b);
+                    var b = sha.ComputeHash(Encoding.UTF8.GetBytes(raw));
+                    var sb = new StringBuilder();
+                    foreach (var x in b) sb.AppendFormat("{0:x2}", x);
                     return sb.ToString();
                 }
             }
@@ -261,10 +303,7 @@ namespace MyAuth
             {
                 using (var s = new ManagementObjectSearcher("SELECT ProcessorId FROM Win32_Processor"))
                     foreach (ManagementObject o in s.Get())
-                    {
-                        var id = o["ProcessorId"]?.ToString();
-                        if (!string.IsNullOrWhiteSpace(id)) return id.Trim();
-                    }
+                    { var id = o["ProcessorId"]?.ToString(); if (!string.IsNullOrWhiteSpace(id)) return id.Trim(); }
             }
             catch { }
             return "NOCPU";
@@ -274,13 +313,12 @@ namespace MyAuth
         {
             try
             {
-                foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
-                    if (nic.NetworkInterfaceType == NetworkInterfaceType.Ethernet ||
-                        nic.NetworkInterfaceType == NetworkInterfaceType.Wireless80211)
+                foreach (var n in NetworkInterface.GetAllNetworkInterfaces())
+                    if (n.NetworkInterfaceType == NetworkInterfaceType.Ethernet ||
+                        n.NetworkInterfaceType == NetworkInterfaceType.Wireless80211)
                     {
-                        var mac = nic.GetPhysicalAddress().ToString();
-                        if (!string.IsNullOrWhiteSpace(mac) && mac != "000000000000")
-                            return mac;
+                        var m = n.GetPhysicalAddress().ToString();
+                        if (!string.IsNullOrWhiteSpace(m) && m != "000000000000") return m;
                     }
             }
             catch { }
@@ -291,7 +329,7 @@ namespace MyAuth
         private void CheckInit()
         {
             if (!initialized)
-                throw new InvalidOperationException("Chame MyAuthApp.init() antes de login().");
+                throw new InvalidOperationException("Chame MyAuthApp.init() antes de activate().");
         }
 
         private string Post(string endpoint, object payload)
@@ -300,12 +338,9 @@ namespace MyAuth
             var body = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(payload));
 
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11;
-
-            var req           = (HttpWebRequest)WebRequest.Create(url);
-            req.Method        = "POST";
-            req.ContentType   = "application/json";
-            req.ContentLength = body.Length;
-            req.Timeout       = 15000;
+            var req = (HttpWebRequest)WebRequest.Create(url);
+            req.Method = "POST"; req.ContentType = "application/json";
+            req.ContentLength = body.Length; req.Timeout = 15000;
 
             using (var s = req.GetRequestStream()) s.Write(body, 0, body.Length);
             using (var r = (HttpWebResponse)req.GetResponse())
@@ -316,27 +351,19 @@ namespace MyAuth
         private void HandleWebException(WebException wex)
         {
             if (wex.Response is HttpWebResponse err)
-            {
                 using (var rd = new StreamReader(err.GetResponseStream(), Encoding.UTF8))
                 {
-                    try
-                    {
-                        var obj = JObject.Parse(rd.ReadToEnd());
-                        response.success = false;
-                        response.message = obj["message"]?.Value<string>() ?? "Erro no servidor.";
-                    }
-                    catch
-                    {
-                        response.success = false;
-                        response.message = "Erro HTTP " + (int)err.StatusCode;
-                    }
+                    try { var o = JObject.Parse(rd.ReadToEnd()); response.success = false; response.message = o["message"]?.Value<string>() ?? "Erro."; }
+                    catch { response.success = false; response.message = "Erro HTTP " + (int)err.StatusCode; }
                 }
-            }
-            else
-            {
-                response.success = false;
-                response.message = "Sem conexão. Verifique sua internet.";
-            }
+            else { response.success = false; response.message = "Sem conexão. Verifique sua internet."; }
         }
+    }
+
+    // Helper para invocar na thread UI do WinForms
+    internal static class Application
+    {
+        public static void Invoke(Action a) { System.Windows.Forms.Application.OpenForms[0]?.Invoke(a); }
+        public static void Exit() { System.Windows.Forms.Application.Exit(); }
     }
 }

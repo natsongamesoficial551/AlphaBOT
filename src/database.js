@@ -124,16 +124,42 @@ function _createTables() {
     criado_em  TEXT DEFAULT (datetime('now','localtime'))
   )`);
 
-  // ── Tabelas de autenticação própria (substitui KeyAuth) ──────────────────
-  db.run(`CREATE TABLE IF NOT EXISTS auth_users (
+  // ── Sistema Auth Key ─────────────────────────────────────────────────────
+  // Solicitações pendentes de aprovação do ADM
+  db.run(`CREATE TABLE IF NOT EXISTS auth_requests (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    username      TEXT UNIQUE NOT NULL COLLATE NOCASE,
+    discord_id    TEXT UNIQUE NOT NULL,
+    discord_tag   TEXT,
+    nome_completo TEXT NOT NULL,
+    username      TEXT NOT NULL,
     password_hash TEXT NOT NULL,
-    plan          TEXT DEFAULT 'gratis',
-    expiry        TEXT,
-    discord_id    TEXT,
-    criado_em     TEXT DEFAULT (datetime('now','localtime')),
-    ultimo_login  TEXT
+    status        TEXT DEFAULT 'pendente',
+    staff_msg_id  TEXT,
+    criado_em     TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
+  // Contas aprovadas com Auth Key
+  db.run(`CREATE TABLE IF NOT EXISTS auth_users (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    discord_id      TEXT UNIQUE NOT NULL,
+    discord_tag     TEXT,
+    nome_completo   TEXT,
+    username        TEXT UNIQUE NOT NULL COLLATE NOCASE,
+    password_hash   TEXT NOT NULL,
+    auth_key        TEXT UNIQUE NOT NULL,
+    hwid            TEXT,
+    -- Tempo de uso ativo (em segundos acumulados)
+    uso_segundos    INTEGER DEFAULT 0,
+    -- Limite de uso ativo: 24h = 86400s
+    limite_segundos INTEGER DEFAULT 86400,
+    -- Última vez que o heartbeat chegou (painel aberto)
+    ultimo_heartbeat TEXT,
+    -- Quando entrou em cooldown (após esgotar as 24h)
+    cooldown_inicio TEXT,
+    -- ADM pode definir data de expiração total via /timeauth
+    expiry_adm      TEXT,
+    ativo           INTEGER DEFAULT 1,
+    criado_em       TEXT DEFAULT (datetime('now','localtime'))
   )`);
 
   db.run(`CREATE TABLE IF NOT EXISTS auth_sessions (
@@ -155,7 +181,6 @@ function _createTables() {
 }
 
 function _migrate() {
-  // Adiciona colunas novas em tabelas existentes sem apagar dados
   const migrations = [
     { table: 'produtos',  column: 'tipo',        def: `TEXT DEFAULT 'pago'` },
     { table: 'produtos',  column: 'preco_coins',  def: `INTEGER DEFAULT 0` },
@@ -164,18 +189,12 @@ function _migrate() {
     { table: 'produtos',  column: 'message_id',   def: `TEXT` },
     { table: 'produtos',  column: 'canal_id',     def: `TEXT` },
     { table: 'membros',   column: 'xit_id',       def: `TEXT` },
-    // HWID — vincula conta ao PC (CPU ID + MAC)
-    { table: 'auth_users', column: 'hwid',         def: `TEXT` },
-    { table: 'auth_users', column: 'hwid_tentativas', def: `INTEGER DEFAULT 0` },
   ];
 
   for (const m of migrations) {
     try {
       db.run(`ALTER TABLE ${m.table} ADD COLUMN ${m.column} ${m.def}`);
-      console.log(`[DB] Migração: coluna '${m.column}' adicionada em '${m.table}'`);
-    } catch (_) {
-      // Coluna já existe — ignorar
-    }
+    } catch (_) {}
   }
 }
 
@@ -346,34 +365,151 @@ function addLog(guildId, tipo, descricao, autorId = '') {
     [guildId, tipo, descricao, autorId]);
 }
 
-// ── Auth Users (substitui KeyAuth) ───────────────────────
-function authUserExiste(username) {
-  return !!get(`SELECT id FROM auth_users WHERE username=?`, [username]);
+// ── Auth Key System ──────────────────────────────────────
+
+// ── Solicitações ─────────────────────────────────────────
+function criarSolicitacao(discordId, discordTag, nomeCompleto, username, passwordHash) {
+  // 1 solicitação por Discord (bloqueia múltiplas)
+  const existe = get(`SELECT id, status FROM auth_requests WHERE discord_id=?`, [discordId]);
+  if (existe) return { ok: false, status: existe.status };
+  run(
+    `INSERT INTO auth_requests (discord_id, discord_tag, nome_completo, username, password_hash)
+     VALUES (?,?,?,?,?)`,
+    [discordId, discordTag, nomeCompleto, username, passwordHash]
+  );
+  return { ok: true };
 }
 
-function getAuthUser(username) {
-  return get(`SELECT * FROM auth_users WHERE username=?`, [username]);
+function getSolicitacao(discordId) {
+  return get(`SELECT * FROM auth_requests WHERE discord_id=?`, [discordId]);
+}
+
+function getSolicitacaoPorId(id) {
+  return get(`SELECT * FROM auth_requests WHERE id=?`, [id]);
+}
+
+function atualizarStatusSolicitacao(id, status) {
+  run(`UPDATE auth_requests SET status=? WHERE id=?`, [status, id]);
+}
+
+function salvarStaffMsgId(id, msgId) {
+  run(`UPDATE auth_requests SET staff_msg_id=? WHERE id=?`, [msgId, id]);
+}
+
+// ── Contas aprovadas ──────────────────────────────────────
+function aprovarSolicitacao(reqId, authKey) {
+  const req = getSolicitacaoPorId(reqId);
+  if (!req) return false;
+
+  // Bloqueia se discord já tem conta aprovada
+  const jaAprovado = get(`SELECT id FROM auth_users WHERE discord_id=?`, [req.discord_id]);
+  if (jaAprovado) return false;
+
+  run(
+    `INSERT INTO auth_users (discord_id, discord_tag, nome_completo, username, password_hash, auth_key)
+     VALUES (?,?,?,?,?,?)`,
+    [req.discord_id, req.discord_tag, req.nome_completo, req.username, req.password_hash, authKey]
+  );
+  atualizarStatusSolicitacao(reqId, 'aprovado');
+  return true;
+}
+
+function getAuthUserByKey(authKey) {
+  return get(`SELECT * FROM auth_users WHERE auth_key=?`, [authKey]);
 }
 
 function getAuthUserByDiscord(discordId) {
   return get(`SELECT * FROM auth_users WHERE discord_id=?`, [discordId]);
 }
 
-function getAuthUserByHwid(hwid) {
-  return get(`SELECT * FROM auth_users WHERE hwid=?`, [hwid]);
+function getAuthUserByUsername(username) {
+  return get(`SELECT * FROM auth_users WHERE username=?`, [username]);
 }
 
-function setAuthHwid(username, hwid) {
-  run(`UPDATE auth_users SET hwid=? WHERE username=?`, [hwid, username]);
+// ── Heartbeat: conta tempo de uso ativo ──────────────────
+// Chamado pelo C# a cada 60s enquanto o painel está aberto
+function processarHeartbeat(authKey) {
+  const user = getAuthUserByKey(authKey);
+  if (!user || !user.ativo) return { ok: false, message: 'Auth Key inválida.' };
+
+  const agora = new Date();
+
+  // Verifica expiração total definida pelo ADM
+  if (user.expiry_adm && new Date(user.expiry_adm) < agora) {
+    return { ok: false, message: 'Sua licença expirou. Fale com o staff.' };
+  }
+
+  // Verifica cooldown de 30 dias
+  if (user.cooldown_inicio) {
+    const fimCooldown = new Date(user.cooldown_inicio);
+    fimCooldown.setDate(fimCooldown.getDate() + 30);
+    if (agora < fimCooldown) {
+      const diasRestantes = Math.ceil((fimCooldown - agora) / (1000 * 60 * 60 * 24));
+      return { ok: false, message: `Em cooldown. Disponível em ${diasRestantes} dia(s).` };
+    }
+    // Cooldown encerrado — reseta contadores
+    run(
+      `UPDATE auth_users SET uso_segundos=0, cooldown_inicio=NULL, ultimo_heartbeat=NULL WHERE auth_key=?`,
+      [authKey]
+    );
+  }
+
+  // Calcula segundos desde o último heartbeat (máx 70s para não acumular se desconectar)
+  let segundosAdicionados = 0;
+  if (user.ultimo_heartbeat) {
+    const diff = Math.floor((agora - new Date(user.ultimo_heartbeat)) / 1000);
+    segundosAdicionados = Math.min(diff, 70); // tolerância de 10s além do intervalo
+  }
+
+  const novoUso = (user.uso_segundos || 0) + segundosAdicionados;
+  const limite  = user.limite_segundos || 86400; // 24h padrão
+
+  if (novoUso >= limite) {
+    // Esgotou as 24h → entra em cooldown
+    run(
+      `UPDATE auth_users SET uso_segundos=?, cooldown_inicio=?, ultimo_heartbeat=? WHERE auth_key=?`,
+      [limite, agora.toISOString(), agora.toISOString(), authKey]
+    );
+    return { ok: false, message: 'Suas 24h foram utilizadas. Cooldown de 30 dias iniciado.' };
+  }
+
+  // Atualiza uso
+  run(
+    `UPDATE auth_users SET uso_segundos=?, ultimo_heartbeat=? WHERE auth_key=?`,
+    [novoUso, agora.toISOString(), authKey]
+  );
+
+  const segundosRestantes = limite - novoUso;
+  const horas   = Math.floor(segundosRestantes / 3600);
+  const minutos = Math.floor((segundosRestantes % 3600) / 60);
+
+  return {
+    ok: true,
+    uso_segundos:      novoUso,
+    segundos_restantes: segundosRestantes,
+    tempo_restante:    `${horas}h ${minutos}m`,
+  };
 }
 
-function incrementHwidTentativa(hwid) {
-  run(`UPDATE auth_users SET hwid_tentativas = hwid_tentativas + 1 WHERE hwid=?`, [hwid]);
+// ── HWID ─────────────────────────────────────────────────
+function vincularHwid(authKey, hwid) {
+  run(`UPDATE auth_users SET hwid=? WHERE auth_key=? AND hwid IS NULL`, [hwid, authKey]);
 }
 
+function getHwidByKey(authKey) {
+  return get(`SELECT hwid FROM auth_users WHERE auth_key=?`, [authKey])?.hwid || null;
+}
+
+// ── /timeauth — ADM define expiração total ────────────────
+function setExpiryAdm(discordId, dataExpiry) {
+  run(`UPDATE auth_users SET expiry_adm=? WHERE discord_id=?`, [dataExpiry, discordId]);
+}
+
+// ── Listagem ─────────────────────────────────────────────
 function listarAuthUsers(limite = 100) {
   return query(
-    `SELECT username, plan, expiry, discord_id, hwid, criado_em, ultimo_login
+    `SELECT username, discord_tag, nome_completo, auth_key, uso_segundos,
+            limite_segundos, cooldown_inicio, expiry_adm, hwid, criado_em
      FROM auth_users ORDER BY id DESC LIMIT ?`,
     [limite]
   );
@@ -393,7 +529,11 @@ module.exports = {
   getCarteira, getSaldo, adicionarSaldo, removerSaldo, getExtrato,
   getYTConfig, setYTConfig, updateUltimoVideo,
   addLog,
-  authUserExiste, getAuthUser, getAuthUserByDiscord, getAuthUserByHwid,
-  setAuthHwid, incrementHwidTentativa,
+  // Auth Key System
+  criarSolicitacao, getSolicitacao, getSolicitacaoPorId,
+  atualizarStatusSolicitacao, salvarStaffMsgId,
+  aprovarSolicitacao, getAuthUserByKey, getAuthUserByDiscord,
+  getAuthUserByUsername, processarHeartbeat,
+  vincularHwid, getHwidByKey, setExpiryAdm,
   listarAuthUsers, totalAuthUsers,
 };

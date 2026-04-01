@@ -1,114 +1,59 @@
 /**
- * myauth.js — Módulo de autenticação própria no bot Discord
- * Substitui completamente o KeyAuth.
- * 
- * O bot salva usuários no banco local (SQLite via sql.js)
- * e expõe uma API REST própria hospedada no Render.
+ * myauth.js — Sistema Auth Key
+ *
+ * Fluxo:
+ * 1. Pessoa clica "Solicitar Auth Key" no canal
+ * 2. Modal: Nome Completo, Usuário, Senha
+ * 3. Bot manda pedido pro canal staff com ✅ Aprovar / ❌ Reprovar
+ * 4. ADM aprova → bot gera Auth Key única e manda DM
+ * 5. Pessoa digita o Auth Key no C# pra ativar
+ * 6. 24h de uso ativo (heartbeat), cooldown de 30 dias após esgotar
  */
 
 const {
-  EmbedBuilder,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
-  MessageFlags,
+  EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
+  ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags,
 } = require('discord.js');
-const { run, query, get } = require('../database');
-
-// ─── Config ──────────────────────────────────────────────────────────────────
-const AUTH_CHANNEL_ID  = process.env.AUTH_CHANNEL_ID || '1488295073274790015';
-const BOT_SECRET       = process.env.AUTH_BOT_SECRET  || 'alpha_xit_bot_2024';
-
-// Planos disponíveis (igual ao KeyAuth anterior)
-const PLANOS = {
-  gratis:     { label: '🆓 Grátis (24h)',     dias: 1,    preco: 0,  emoji: '🆓' },
-  mensal:     { label: '📅 1 Mês — R$25',     dias: 30,   preco: 25, emoji: '📅' },
-  anual:      { label: '📆 1 Ano — R$40',     dias: 365,  preco: 40, emoji: '📆' },
-  permanente: { label: '♾️ Permanente — R$85', dias: -1,   preco: 85, emoji: '♾️' },
-};
-
-// ─── Funções diretas no banco (sem HTTP, mesmo processo) ─────────────────────
 const crypto = require('crypto');
+const db = require('../database');
 
-function _nomePlano(plan) {
-  const nomes = { gratis: '🆓 Grátis (24h)', mensal: '📅 Mensal', anual: '📆 Anual', permanente: '♾️ Permanente' };
-  return nomes[plan] || plan;
+const AUTH_CHANNEL_ID  = process.env.AUTH_CHANNEL_ID  || '';
+const STAFF_CHANNEL_ID = process.env.STAFF_CHANNEL_ID || '';
+
+// ── Gera Auth Key no formato XXXXXX-XXXXXX-XXXXXX ─────────────────────────
+function gerarAuthKey() {
+  const seg = () => crypto.randomBytes(3).toString('hex').toUpperCase();
+  return `${seg()}-${seg()}-${seg()}`;
 }
 
+// ── Hash de senha ─────────────────────────────────────────────────────────
 function hashPassword(password) {
-  return crypto.createHash('sha256')
-    .update(password + (process.env.AUTH_SALT || 'alphaxitsalt2024'))
-    .digest('hex');
+  const salt = process.env.AUTH_SALT || 'alphaxitsalt2024';
+  return crypto.createHash('sha256').update(password + salt).digest('hex');
 }
 
-function criarContaLocal(username, password, plan, discordId) {
-  // Verifica se username já existe
-  const existing = get(`SELECT id FROM auth_users WHERE username=?`, [username]);
-  if (existing) {
-    return { success: false, message: 'Esse nome de usuário já está em uso.' };
-  }
-
-  // Verifica se esse Discord já tem conta (1 conta por Discord)
-  if (discordId) {
-    const existeDiscord = get(`SELECT username FROM auth_users WHERE discord_id=?`, [discordId]);
-    if (existeDiscord) {
-      return {
-        success: false,
-        message: `Esse Discord já possui a conta \`${existeDiscord.username}\` cadastrada.`,
-        conta_existente: existeDiscord.username,
-      };
-    }
-  }
-
-  // Calcula expiração
-  const dias = PLANOS[plan]?.dias ?? 1;
-  let expiry;
-  if (dias === -1) {
-    expiry = 'permanent';
-  } else {
-    const d = new Date();
-    d.setDate(d.getDate() + dias);
-    expiry = d.toISOString();
-  }
-
-  const hash = hashPassword(password);
-
-  try {
-    run(
-      `INSERT INTO auth_users (username, password_hash, plan, expiry, discord_id) VALUES (?,?,?,?,?)`,
-      [username, hash, plan, expiry, discordId || null]
-    );
-    run(`INSERT INTO auth_logs (username, acao) VALUES (?, ?)`, [username, 'register']);
-    return { success: true, expiry, plan };
-  } catch (err) {
-    return { success: false, message: 'Erro ao criar conta: ' + err.message };
-  }
-}
-
-// ─── Embed principal do canal de autenticação ─────────────────────────────────
+// ── Embed principal do canal (botão de solicitação) ───────────────────────
 function embedAuthPayload() {
   const embed = new EmbedBuilder()
     .setColor(0x5865F2)
-    .setTitle('🔑 Alpha Xit — Criar Conta')
+    .setTitle('🔑 Alpha Xit — Solicitar Auth Key')
     .setDescription(
-      '> Crie sua conta e acesse nosso software instantaneamente!\n\n' +
-      '**Planos disponíveis:**\n\n' +
-      '🆓 **Grátis** — 24 horas de acesso\n' +
-      '📅 **Mensal** — 1 mês · R$ 25,00\n' +
-      '📆 **Anual** — 1 ano · R$ 40,00\n' +
-      '♾️ **Permanente** — Acesso vitalício · R$ 85,00\n\n' +
-      '> Clique em **Criar Conta** abaixo para começar!'
+      '> Solicite sua **Auth Key** para acessar o software!\n\n' +
+      '**Como funciona:**\n' +
+      '> 1️⃣ Clique em **Solicitar** e preencha seus dados\n' +
+      '> 2️⃣ Aguarde a aprovação do **staff**\n' +
+      '> 3️⃣ Receba sua **Auth Key** na DM\n' +
+      '> 4️⃣ Digite a key no software para ativar\n\n' +
+      '⏱️ **24h de uso ativo** · 🔄 **Cooldown de 30 dias após esgotar**\n\n' +
+      '> ⚠️ Apenas **1 Auth Key por pessoa**. Seja honesto!'
     )
-    .setFooter({ text: "Borgesnatan09's Application • Powered by Alpha Xit Auth" })
+    .setFooter({ text: "Borgesnatan09's Application • Alpha Xit Auth" })
     .setTimestamp();
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId('btn_auth_abrir')
-      .setLabel('Criar Conta')
+      .setCustomId('btn_auth_solicitar')
+      .setLabel('Solicitar Auth Key')
       .setEmoji('🔑')
       .setStyle(ButtonStyle.Primary)
   );
@@ -116,314 +61,285 @@ function embedAuthPayload() {
   return { embed, row };
 }
 
-// ─── Embed seleção de plano ───────────────────────────────────────────────────
-function embedSelecionarPlano() {
-  return new EmbedBuilder()
-    .setColor(0x5865F2)
-    .setTitle('🔑 Selecione seu Plano')
-    .setDescription(
-      'Escolha o plano desejado para criar sua conta.\n\n' +
-      '> **Grátis** é liberado automaticamente!\n' +
-      '> Planos **pagos** requerem confirmação do staff após o pagamento.'
-    )
-    .setFooter({ text: "Alpha Xit Auth" });
-}
-
-function rowSelecionarPlano() {
-  const row1 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('btn_auth_plano_gratis').setLabel('🆓 Grátis (24h)').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId('btn_auth_plano_mensal').setLabel('📅 Mensal — R$25').setStyle(ButtonStyle.Primary),
-  );
-  const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('btn_auth_plano_anual').setLabel('📆 Anual — R$40').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('btn_auth_plano_permanente').setLabel('♾️ Permanente — R$85').setStyle(ButtonStyle.Danger),
-  );
-  return [row1, row2];
-}
-
-// ─── Modal de criação de conta ────────────────────────────────────────────────
-function modalCriarConta(plano) {
+// ── Modal de solicitação ──────────────────────────────────────────────────
+function modalSolicitarKey() {
   const modal = new ModalBuilder()
-    .setCustomId(`modal_auth_criar_${plano}`)
-    .setTitle('🔑 Criar Conta');
-
-  const inputUser = new TextInputBuilder()
-    .setCustomId('auth_username')
-    .setLabel('Nome de usuário')
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder('Ex: NatanXit')
-    .setMinLength(3)
-    .setMaxLength(32)
-    .setRequired(true);
-
-  const inputPass = new TextInputBuilder()
-    .setCustomId('auth_password')
-    .setLabel('Senha')
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder('Mínimo 6 caracteres')
-    .setMinLength(6)
-    .setMaxLength(64)
-    .setRequired(true);
+    .setCustomId('modal_auth_solicitar')
+    .setTitle('🔑 Solicitar Auth Key');
 
   modal.addComponents(
-    new ActionRowBuilder().addComponents(inputUser),
-    new ActionRowBuilder().addComponents(inputPass),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('auth_nome')
+        .setLabel('Nome e Sobrenome')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('Ex: João Silva')
+        .setMinLength(4).setMaxLength(60).setRequired(true)
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('auth_username')
+        .setLabel('Usuário (para login no software)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('Ex: joaosilva (sem espaços)')
+        .setMinLength(3).setMaxLength(32).setRequired(true)
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('auth_password')
+        .setLabel('Senha')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('Mínimo 6 caracteres')
+        .setMinLength(6).setMaxLength(64).setRequired(true)
+    ),
   );
 
   return modal;
 }
 
-// ─── Handlers ─────────────────────────────────────────────────────────────────
+// ── Handler: botão "Solicitar Auth Key" ───────────────────────────────────
+async function handleBtnAuthSolicitar(interaction) {
+  // Verifica se já tem solicitação ou conta
+  const solicitacao = db.getSolicitacao(interaction.user.id);
+  const conta       = db.getAuthUserByDiscord(interaction.user.id);
 
-async function handleBtnAuthAbrir(interaction) {
-  await interaction.reply({
-    embeds: [embedSelecionarPlano()],
-    components: rowSelecionarPlano(),
-    flags: MessageFlags.Ephemeral,
-  });
+  if (conta) {
+    return interaction.reply({
+      embeds: [new EmbedBuilder().setColor(0xF39C12).setDescription(
+        '⚠️ Você já possui uma **Auth Key** ativa!\n\nSuas credenciais foram enviadas na sua DM quando foi aprovado.\nSe perdeu, fale com o **staff**.'
+      )],
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  if (solicitacao) {
+    const statusMsg = {
+      pendente:  '⏳ Sua solicitação está **aguardando aprovação** do staff.',
+      reprovado: '❌ Sua solicitação foi **reprovada**. Fale com o staff para mais informações.',
+      aprovado:  '✅ Sua solicitação já foi **aprovada**! Verifique sua DM.',
+    };
+    return interaction.reply({
+      embeds: [new EmbedBuilder().setColor(0xF39C12).setDescription(
+        statusMsg[solicitacao.status] || '⚠️ Você já tem uma solicitação.'
+      )],
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  await interaction.showModal(modalSolicitarKey());
 }
 
-async function handleBtnAuthPlano(interaction, plano) {
-  const cfg = PLANOS[plano];
-  if (!cfg) return interaction.reply({ content: '❌ Plano inválido.', flags: MessageFlags.Ephemeral });
-  await interaction.showModal(modalCriarConta(plano));
-}
-
-async function handleModalAuthCriar(interaction, plano) {
+// ── Handler: submit do modal ──────────────────────────────────────────────
+async function handleModalAuthSolicitar(interaction) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  const cfg = PLANOS[plano];
-  if (!cfg) return interaction.editReply({ content: '❌ Plano inválido.' });
+  const nomeCompleto = interaction.fields.getTextInputValue('auth_nome').trim();
+  const username     = interaction.fields.getTextInputValue('auth_username').trim();
+  const password     = interaction.fields.getTextInputValue('auth_password').trim();
 
-  const username = interaction.fields.getTextInputValue('auth_username').trim();
-  const password = interaction.fields.getTextInputValue('auth_password').trim();
-
-  // Validação do username
   if (!/^[a-zA-Z0-9_.-]{3,32}$/.test(username)) {
     return interaction.editReply({
       embeds: [new EmbedBuilder().setColor(0xE74C3C).setDescription(
-        '❌ Nome de usuário inválido! Use apenas letras, números, `_`, `-` ou `.` (3–32 caracteres).'
+        '❌ Usuário inválido! Use apenas letras, números, `_` ou `.` (3–32 caracteres, sem espaços).'
       )],
     });
   }
 
-  // ── BLOQUEIO: 1 conta por Discord ──────────────────────────────────────────
-  // Verifica se esse discord_id já tem conta cadastrada
-  const { getAuthUserByDiscord } = require('../database');
-  const contaExistente = getAuthUserByDiscord(interaction.user.id);
-  if (contaExistente) {
-    // Envia as credenciais via DM (privado, seguro)
-    try {
-      await interaction.user.send({
-        embeds: [new EmbedBuilder()
-          .setColor(0xF39C12)
-          .setTitle('⚠️ Você já possui uma conta cadastrada!')
-          .setDescription(
-            `Sua conta no **Alpha Xit** já foi criada anteriormente.\n\n` +
-            `> 👤 **Usuário:** \`${contaExistente.username}\`\n` +
-            `> 📦 **Plano:** ${_nomePlano(contaExistente.plan)}\n\n` +
-            `Use essas credenciais para acessar o software.\n` +
-            `Se esqueceu sua senha, fale com o **staff** no canal de suporte.`
-          )
-          .setFooter({ text: 'Alpha Xit Auth • Esta mensagem é privada' })
-          .setTimestamp()
-        ],
-      });
-    } catch (_) {}
+  // Bloqueia username duplicado
+  const usernameEmUso = db.getAuthUserByUsername(username);
+  if (usernameEmUso) {
+    return interaction.editReply({
+      embeds: [new EmbedBuilder().setColor(0xE74C3C).setDescription(
+        '❌ Este nome de usuário já está em uso. Escolha outro.'
+      )],
+    });
+  }
 
+  const resultado = db.criarSolicitacao(
+    interaction.user.id,
+    interaction.user.tag,
+    nomeCompleto,
+    username,
+    hashPassword(password)
+  );
+
+  if (!resultado.ok) {
+    const msgs = {
+      pendente:  '⏳ Você já tem uma solicitação aguardando aprovação.',
+      aprovado:  '✅ Você já foi aprovado! Verifique sua DM.',
+      reprovado: '❌ Sua solicitação anterior foi reprovada. Fale com o staff.',
+    };
     return interaction.editReply({
       embeds: [new EmbedBuilder().setColor(0xF39C12).setDescription(
-        `⚠️ Você já possui uma conta cadastrada!\n\nAs suas credenciais foram enviadas na sua **DM** 📩`
+        msgs[resultado.status] || '⚠️ Você já tem uma solicitação registrada.'
       )],
     });
   }
 
-  try {
-    // ── PLANO GRÁTIS: cria automaticamente ──────────────────────────────────
-    if (cfg.preco === 0) {
-      const result = criarContaLocal(username, password, plano, interaction.user.id);
+  // Busca a solicitação recém-criada para pegar o ID
+  const req = db.getSolicitacao(interaction.user.id);
 
-      if (!result.success) {
-        return interaction.editReply({
-          embeds: [new EmbedBuilder().setColor(0xE74C3C).setDescription(
-            `❌ ${result.message}`
-          )],
-        });
-      }
+  // Manda pro canal staff
+  const guild     = interaction.guild;
+  const chStaff   = guild?.channels.cache.get(STAFF_CHANNEL_ID)
+                 || guild?.channels.cache.find(c =>
+                      c.name.includes('staff') || c.name.includes('bot-logs')
+                    );
 
-      await interaction.editReply({
-        embeds: [new EmbedBuilder()
-          .setColor(0x2ECC71)
-          .setTitle('✅ Conta criada com sucesso!')
-          .setDescription(
-            `🎉 Sua conta foi criada!\n\n` +
-            `> 👤 **Usuário:** \`${username}\`\n` +
-            `> ⏳ **Plano:** ${cfg.label}\n` +
-            `> 🔑 **Senha:** configurada (guarde em segredo!)\n\n` +
-            `Use as credenciais acima para acessar o software!\n` +
-            `> ⚠️ Guarde sua senha em segredo.`
-          )
-          .setFooter({ text: `Alpha Xit Auth • Expira em 24h` })
-          .setTimestamp()
-        ],
-      });
+  if (chStaff) {
+    const rowAdmin = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`btn_auth_aprovar_${req.id}`)
+        .setLabel('✅ Aprovar')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`btn_auth_reprovar_${req.id}`)
+        .setLabel('❌ Reprovar')
+        .setStyle(ButtonStyle.Danger),
+    );
 
-    // ── PLANOS PAGOS: redireciona para canal de suporte ──────────────────────
-    } else {
-      const canalSuporte = process.env.AUTH_SUPORTE_CANAL || '❓・auth-id-duvidas';
-      const guild = interaction.guild;
-
-      // Tenta achar pelo nome configurado
-      const chSuporte = guild?.channels.cache.find(c =>
-        c.name === canalSuporte || c.name.includes('auth-id-duvidas') || c.name.includes('suporte')
-      );
-
-      const mencionCanal = chSuporte ? `<#${chSuporte.id}>` : `**#${canalSuporte}**`;
-
-      await interaction.editReply({
-        embeds: [new EmbedBuilder()
-          .setColor(0x5865F2)
-          .setTitle(`${cfg.emoji} Plano ${cfg.label}`)
-          .setDescription(
-            `Para adquirir o plano **${cfg.label}**, você precisa falar com o **staff**!\n\n` +
-            `> 📩 Vá até o canal ${mencionCanal}\n` +
-            `> 💬 Informe o plano desejado e aguarde um staff te atender\n` +
-            `> ✅ Após confirmação do pagamento, sua conta será criada pelo staff\n\n` +
-            `**O que você já escolheu:**\n` +
-            `> 👤 **Usuário desejado:** \`${username}\`\n` +
-            `> 📦 **Plano:** ${cfg.label}\n` +
-            `> 💵 **Valor:** R$ ${cfg.preco},00\n\n` +
-            `> ⚠️ Leve essas informações ao canal de suporte!`
-          )
-          .setFooter({ text: 'Alpha Xit Auth • Atendimento via staff' })
-          .setTimestamp()
-        ],
-      });
-    }
-
-  } catch (err) {
-    console.error('[AUTH]', err.message);
-    return interaction.editReply({
-      embeds: [new EmbedBuilder().setColor(0xE74C3C).setDescription(
-        `❌ Erro ao criar conta: \`${err.message}\`\n\nTente novamente ou contate o suporte.`
-      )],
+    const msgStaff = await chStaff.send({
+      embeds: [new EmbedBuilder()
+        .setColor(0xF39C12)
+        .setTitle('🔑 Nova Solicitação de Auth Key')
+        .setDescription(
+          `> 👤 **Discord:** <@${interaction.user.id}> (${interaction.user.tag})\n` +
+          `> 📛 **Nome:** ${nomeCompleto}\n` +
+          `> 🔑 **Usuário:** \`${username}\`\n` +
+          `> 🆔 **Solicitação ID:** #${req.id}\n\n` +
+          `Converse com o usuário para verificar a identidade antes de aprovar.\n` +
+          `Após confirmar, clique em **✅ Aprovar**.`
+        )
+        .setFooter({ text: 'Alpha Xit Auth • Aguardando aprovação do staff' })
+        .setTimestamp()
+      ],
+      components: [rowAdmin],
     });
+
+    db.salvarStaffMsgId(req.id, msgStaff.id);
   }
+
+  await interaction.editReply({
+    embeds: [new EmbedBuilder()
+      .setColor(0x2ECC71)
+      .setTitle('✅ Solicitação enviada!')
+      .setDescription(
+        `Sua solicitação foi enviada para aprovação do **staff**!\n\n` +
+        `> 📛 **Nome:** ${nomeCompleto}\n` +
+        `> 🔑 **Usuário:** \`${username}\`\n\n` +
+        `Aguarde — o staff irá verificar suas informações e pode entrar em contato.\n` +
+        `Quando aprovado, você receberá sua **Auth Key** na **DM**.`
+      )
+      .setFooter({ text: 'Alpha Xit Auth' })
+      .setTimestamp()
+    ],
+  });
 }
 
-// ─── Admin: Aprovar pedido pago ───────────────────────────────────────────────
-async function handleBtnAuthAprovar(interaction, partes) {
-  const [userId, plano, username, passwordB64] = partes;
-  const password = Buffer.from(passwordB64, 'base64').toString('utf8');
-  const cfg = PLANOS[plano];
-
-  if (!cfg) return interaction.reply({ content: '❌ Plano inválido.', flags: MessageFlags.Ephemeral });
-
+// ── Handler: staff aprova ─────────────────────────────────────────────────
+async function handleBtnAuthAprovar(interaction, reqId) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  try {
-    const result = criarContaLocal(username, password, plano, userId);
-    if (!result.success) throw new Error(result.message);
-
-    // Notifica o usuário via DM
-    try {
-      const user = await interaction.client.users.fetch(userId);
-      await user.send({
-        embeds: [new EmbedBuilder()
-          .setColor(0x2ECC71)
-          .setTitle('✅ Pagamento Confirmado — Conta Criada!')
-          .setDescription(
-            `🎉 Seu pagamento foi confirmado e sua conta foi criada!\n\n` +
-            `> 👤 **Usuário:** \`${username}\`\n` +
-            `> 📦 **Plano:** ${cfg.label}\n` +
-            `> ⏳ **Duração:** ${cfg.dias === -1 ? 'Permanente' : `${cfg.dias} dias`}\n` +
-            `> 🔑 **Senha:** a que você definiu\n\n` +
-            `Acesse o software com as credenciais acima!\n` +
-            `> ⚠️ Guarde sua senha em segredo.`
-          )
-          .setFooter({ text: "Alpha Xit Auth" })
-          .setTimestamp()
-        ],
-      });
-    } catch (_) {}
-
-    // Desabilita botões da mensagem de aprovação
-    try { await interaction.message.edit({ components: [] }); } catch (_) {}
-
-    await interaction.editReply({
-      embeds: [new EmbedBuilder().setColor(0x2ECC71).setDescription(
-        `✅ Conta \`${username}\` criada com plano **${cfg.label}**!\nUsuário notificado na DM.`
-      )],
-    });
-
-  } catch (err) {
-    console.error('[AUTH APROVAR]', err.message);
-    await interaction.editReply({
-      embeds: [new EmbedBuilder().setColor(0xE74C3C).setDescription(
-        `❌ Erro ao criar conta: \`${err.message}\``
-      )],
-    });
+  const req = db.getSolicitacaoPorId(parseInt(reqId));
+  if (!req) {
+    return interaction.editReply({ embeds: [new EmbedBuilder().setColor(0xE74C3C).setDescription('❌ Solicitação não encontrada.')] });
   }
+  if (req.status === 'aprovado') {
+    return interaction.editReply({ embeds: [new EmbedBuilder().setColor(0xF39C12).setDescription('⚠️ Esta solicitação já foi aprovada.')] });
+  }
+
+  const authKey = gerarAuthKey();
+  const ok = db.aprovarSolicitacao(req.id, authKey);
+
+  if (!ok) {
+    return interaction.editReply({ embeds: [new EmbedBuilder().setColor(0xE74C3C).setDescription('❌ Erro ao aprovar. Discord já pode ter uma conta vinculada.')] });
+  }
+
+  // Envia Auth Key via DM
+  try {
+    const user = await interaction.client.users.fetch(req.discord_id);
+    await user.send({
+      embeds: [new EmbedBuilder()
+        .setColor(0x2ECC71)
+        .setTitle('🎉 Sua Auth Key foi aprovada!')
+        .setDescription(
+          `Olá, **${req.nome_completo}**!\n\n` +
+          `Sua solicitação foi **aprovada** pelo staff.\n\n` +
+          `**🔑 Sua Auth Key:**\n` +
+          `\`\`\`\n${authKey}\n\`\`\`\n` +
+          `**👤 Usuário:** \`${req.username}\`\n\n` +
+          `**Como usar:**\n` +
+          `> 1. Abra o software Alpha Xit\n` +
+          `> 2. Digite o **Usuário** e a **Senha** que você criou\n` +
+          `> 3. Insira a **Auth Key** acima\n\n` +
+          `⏱️ Você tem **24h de uso ativo** (conta só quando o painel está aberto).\n` +
+          `> ⚠️ Guarde esta key com segurança — ela é única e pessoal!`
+        )
+        .setFooter({ text: 'Alpha Xit Auth • Não compartilhe sua key!' })
+        .setTimestamp()
+      ],
+    });
+  } catch (_) {}
+
+  // Atualiza mensagem do staff (remove botões)
+  try { await interaction.message.edit({ components: [] }); } catch (_) {}
+
+  await interaction.editReply({
+    embeds: [new EmbedBuilder().setColor(0x2ECC71).setDescription(
+      `✅ **${req.nome_completo}** (${req.discord_tag}) aprovado!\nAuth Key gerada e enviada na DM.\n\`${authKey}\``
+    )],
+  });
 }
 
-// ─── Admin: Rejeitar pedido ───────────────────────────────────────────────────
-async function handleBtnAuthRejeitar(interaction, userId) {
+// ── Handler: staff reprova ────────────────────────────────────────────────
+async function handleBtnAuthReprovar(interaction, reqId) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
+  const req = db.getSolicitacaoPorId(parseInt(reqId));
+  if (!req) {
+    return interaction.editReply({ embeds: [new EmbedBuilder().setColor(0xE74C3C).setDescription('❌ Solicitação não encontrada.')] });
+  }
+
+  db.atualizarStatusSolicitacao(req.id, 'reprovado');
+
   try {
-    const user = await interaction.client.users.fetch(userId);
+    const user = await interaction.client.users.fetch(req.discord_id);
     await user.send({
       embeds: [new EmbedBuilder()
         .setColor(0xE74C3C)
-        .setTitle('❌ Pedido Recusado')
+        .setTitle('❌ Solicitação Reprovada')
         .setDescription(
-          'Seu pedido foi **recusado** pelo staff.\n\n' +
-          'Se acredita que foi um erro, abra um ticket de suporte.'
+          `Olá, **${req.nome_completo}**!\n\n` +
+          `Sua solicitação de Auth Key foi **reprovada** pelo staff.\n\n` +
+          `Se acredita que foi um engano, entre em contato com o **staff** no servidor.`
         )
         .setFooter({ text: 'Alpha Xit Auth' })
+        .setTimestamp()
       ],
     });
   } catch (_) {}
 
   try { await interaction.message.edit({ components: [] }); } catch (_) {}
-  await interaction.editReply({ content: '❌ Pedido rejeitado e usuário notificado.' });
+
+  await interaction.editReply({
+    embeds: [new EmbedBuilder().setColor(0xE74C3C).setDescription(
+      `❌ Solicitação de **${req.nome_completo}** reprovada. Usuário notificado na DM.`
+    )],
+  });
 }
 
-// ─── Roteador principal ───────────────────────────────────────────────────────
+// ── Roteadores ────────────────────────────────────────────────────────────
 async function handleAuthButton(interaction) {
   const { customId } = interaction;
-
-  if (customId === 'btn_auth_abrir') return handleBtnAuthAbrir(interaction);
-  if (customId.startsWith('btn_auth_plano_')) {
-    const plano = customId.replace('btn_auth_plano_', '');
-    return handleBtnAuthPlano(interaction, plano);
-  }
-  if (customId.startsWith('btn_auth_aprovar_')) {
-    const partes = customId.replace('btn_auth_aprovar_', '').split('_');
-    return handleBtnAuthAprovar(interaction, partes);
-  }
-  if (customId.startsWith('btn_auth_rejeitar_')) {
-    const userId = customId.replace('btn_auth_rejeitar_', '');
-    return handleBtnAuthRejeitar(interaction, userId);
-  }
-
+  if (customId === 'btn_auth_solicitar')          return handleBtnAuthSolicitar(interaction);
+  if (customId.startsWith('btn_auth_aprovar_'))   return handleBtnAuthAprovar(interaction, customId.replace('btn_auth_aprovar_', ''));
+  if (customId.startsWith('btn_auth_reprovar_'))  return handleBtnAuthReprovar(interaction, customId.replace('btn_auth_reprovar_', ''));
   return false;
 }
 
 async function handleAuthModal(interaction) {
-  const { customId } = interaction;
-
-  if (customId.startsWith('modal_auth_criar_')) {
-    const plano = customId.replace('modal_auth_criar_', '');
-    return handleModalAuthCriar(interaction, plano);
-  }
-
+  if (interaction.customId === 'modal_auth_solicitar') return handleModalAuthSolicitar(interaction);
   return false;
 }
 
-module.exports = {
-  handleAuthButton,
-  handleAuthModal,
-  embedAuthPayload,
-  AUTH_CHANNEL_ID,
-};
+module.exports = { handleAuthButton, handleAuthModal, embedAuthPayload, AUTH_CHANNEL_ID };

@@ -1,19 +1,13 @@
 /**
- * authApi.js — API REST de autenticação própria (substitui KeyAuth)
- * Roda embutida no bot, exposta via HTTP no mesmo processo do Render.
+ * authApi.js — API REST do sistema Auth Key
  *
  * Endpoints:
- *   POST /auth/init            → inicializa sessão (equivalente ao KeyAuth init)
- *   POST /auth/login           → autentica usuário  (equivalente ao KeyAuth login)
- *   POST /auth/register        → cria usuário       (chamado pelo bot Discord)
- *   POST /auth/log             → registra log de acesso
- *   GET  /auth/check/:user     → verifica se usuário existe
- *   GET  /auth/users           → lista usuários (admin)
- *   GET  /auth/health          → health check da API
- *
- * Integração C# — uso idêntico ao KeyAuth, basta trocar a URL base:
- *   baseUrl: "https://SEU-BOT.onrender.com"
- *   secret:  valor de AUTH_BOT_SECRET no .env
+ *   POST /auth/init       → C# inicializa, envia HWID, recebe status
+ *   POST /auth/activate   → C# ativa com username + senha + auth_key
+ *   POST /auth/heartbeat  → C# envia a cada 60s (conta tempo de uso ativo)
+ *   POST /auth/log        → C# registra log de acesso
+ *   GET  /auth/health     → status da API
+ *   GET  /auth/users      → lista usuários (admin)
  */
 
 const crypto = require('crypto');
@@ -24,7 +18,6 @@ const DB_PATH = process.env.DB_PATH
   ? path.resolve(process.env.DB_PATH)
   : path.join(__dirname, '..', 'data', 'alphabot.db');
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
 function hashPassword(password) {
   const salt = process.env.AUTH_SALT || 'alphaxitsalt2024';
   return crypto.createHash('sha256').update(password + salt).digest('hex');
@@ -37,392 +30,280 @@ function generateSession() {
 function readBody(req) {
   return new Promise((resolve) => {
     let data = '';
-    req.on('data', chunk => { data += chunk; });
-    req.on('end', () => {
-      try { resolve(JSON.parse(data)); }
-      catch (_) { resolve({}); }
-    });
+    req.on('data', c => { data += c; });
+    req.on('end', () => { try { resolve(JSON.parse(data)); } catch (_) { resolve({}); } });
   });
 }
 
 function jsonResponse(res, status, body) {
-  res.writeHead(status, {
-    'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
-  });
+  res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
   res.end(JSON.stringify(body));
 }
 
-// ── Handler principal ────────────────────────────────────────────────────────
 async function handleAuthRequest(req, res, dbInstance) {
   const url    = req.url.split('?')[0];
   const method = req.method;
 
-  // CORS preflight
   if (method === 'OPTIONS') {
-    res.writeHead(204, {
-      'Access-Control-Allow-Origin':  '*',
-      'Access-Control-Allow-Methods': 'GET,POST',
-      'Access-Control-Allow-Headers': 'Content-Type',
-    });
+    res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST', 'Access-Control-Allow-Headers': 'Content-Type' });
     return res.end();
   }
 
   let body = {};
   if (method === 'POST') body = await readBody(req);
 
-  // ── Wrappers locais para o sql.js já inicializado ────────────────────────
   function dbSave() {
     fs.writeFileSync(DB_PATH, Buffer.from(dbInstance.export()));
   }
-
-  function dbRun(sql, params = []) {
-    dbInstance.run(sql, params);
-    dbSave();
-  }
-
+  function dbRun(sql, params = []) { dbInstance.run(sql, params); dbSave(); }
   function dbGet(sql, params = []) {
-    const stmt = dbInstance.prepare(sql);
-    stmt.bind(params);
-    let row = null;
-    if (stmt.step()) row = stmt.getAsObject();
-    stmt.free();
-    return row;
-  }
-
-  function dbQuery(sql, params = []) {
-    const stmt = dbInstance.prepare(sql);
-    stmt.bind(params);
-    const rows = [];
-    while (stmt.step()) rows.push(stmt.getAsObject());
-    stmt.free();
-    return rows;
+    const stmt = dbInstance.prepare(sql); stmt.bind(params);
+    let row = null; if (stmt.step()) row = stmt.getAsObject(); stmt.free(); return row;
   }
 
   // ── GET /auth/health ───────────────────────────────────────────────────────
   if (url === '/auth/health' && method === 'GET') {
     const total = dbGet(`SELECT COUNT(*) as c FROM auth_users`)?.c || 0;
-    return jsonResponse(res, 200, {
-      success: true,
-      message: 'Alpha Xit Auth API online',
-      users: total,
-    });
+    return jsonResponse(res, 200, { success: true, message: 'Alpha Xit Auth API online', users: total });
   }
 
   // ── POST /auth/init ────────────────────────────────────────────────────────
-  // C# chama isso ao abrir o software — já verifica HWID aqui
+  // C# chama ao abrir o software — envia HWID
   if (url === '/auth/init' && method === 'POST') {
     const { hwid } = body;
-
-    // ── Se HWID fornecido, verifica se esse PC já tem conta ─────────────────
-    if (hwid) {
-      const contaVinculada = dbGet(
-        `SELECT username, plan, expiry, discord_id FROM auth_users WHERE hwid=?`,
-        [hwid]
-      );
-
-      if (contaVinculada) {
-        // PC já tem conta — retorna sucesso mas avisa que já existe conta
-        // O C# deve mostrar apenas a tela de LOGIN, nunca de criação
-        const sessionid = generateSession();
-        return jsonResponse(res, 200, {
-          success:       true,
-          sessionid,
-          newSession:    true,
-          hwid_has_account: true,   // flag para o C# esconder botão "Criar Conta"
-          message:       'Conectado ao servidor. Faça login para continuar.',
-        });
-      }
-    }
-
     const sessionid = generateSession();
-    const expira    = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    try {
-      dbRun(
-        `INSERT INTO auth_sessions (sessionid, username, expira_em) VALUES (?,?,?)`,
-        [sessionid, '__init__', expira]
-      );
-    } catch (_) {}
-
     return jsonResponse(res, 200, {
-      success:          true,
+      success:    true,
       sessionid,
-      newSession:       true,
-      hwid_has_account: false,  // PC livre — pode criar conta
-      message:          'Conectado ao servidor. Faça login para continuar.',
+      newSession: true,
+      message:    'Conectado ao servidor. Insira suas credenciais e Auth Key.',
     });
   }
 
-  // ── POST /auth/login ───────────────────────────────────────────────────────
-  // Equivalente ao KeyAuthApp.login(username, password) no C#
-  if (url === '/auth/login' && method === 'POST') {
-    const { username, password, hwid } = body;
+  // ── POST /auth/activate ────────────────────────────────────────────────────
+  // C# envia username + password + auth_key para ativar/logar
+  if (url === '/auth/activate' && method === 'POST') {
+    const { username, password, auth_key, hwid } = body;
 
-    if (!username || !password) {
-      return jsonResponse(res, 400, { success: false, message: 'Preencha usuário e senha!' });
+    if (!username || !password || !auth_key) {
+      return jsonResponse(res, 400, { success: false, message: 'Preencha usuário, senha e Auth Key!' });
     }
 
-    const hash = hashPassword(password);
-    const user = dbGet(
-      `SELECT * FROM auth_users WHERE username=? AND password_hash=?`,
-      [username.trim(), hash]
-    );
+    // Busca por Auth Key
+    const user = dbGet(`SELECT * FROM auth_users WHERE auth_key=?`, [auth_key.trim().toUpperCase()]);
 
     if (!user) {
-      return jsonResponse(res, 401, { success: false, message: 'Usuário ou senha incorretos.' });
+      return jsonResponse(res, 401, { success: false, message: 'Auth Key inválida ou não encontrada.' });
     }
 
-    // Verifica expiração
-    if (user.expiry && user.expiry !== 'permanent') {
-      if (new Date(user.expiry) < new Date()) {
+    // Valida username e senha
+    const hash = hashPassword(password);
+    if (user.username.toLowerCase() !== username.trim().toLowerCase() || user.password_hash !== hash) {
+      return jsonResponse(res, 401, { success: false, message: 'Usuário ou senha incorretos para esta Auth Key.' });
+    }
+
+    if (!user.ativo) {
+      return jsonResponse(res, 403, { success: false, message: 'Esta Auth Key está desativada. Fale com o staff.' });
+    }
+
+    // Verifica expiração definida pelo ADM
+    if (user.expiry_adm && new Date(user.expiry_adm) < new Date()) {
+      return jsonResponse(res, 403, { success: false, message: 'Sua licença expirou. Fale com o staff.' });
+    }
+
+    // Verifica cooldown de 30 dias
+    if (user.cooldown_inicio) {
+      const fimCooldown = new Date(user.cooldown_inicio);
+      fimCooldown.setDate(fimCooldown.getDate() + 30);
+      if (new Date() < fimCooldown) {
+        const dias = Math.ceil((fimCooldown - new Date()) / (1000 * 60 * 60 * 24));
         return jsonResponse(res, 403, {
           success: false,
-          message: 'Sua licença expirou. Renove seu plano no Discord.',
+          message: `Suas 24h foram utilizadas. Cooldown ativo — disponível em ${dias} dia(s).`,
         });
       }
+      // Cooldown encerrado — reseta
+      dbRun(`UPDATE auth_users SET uso_segundos=0, cooldown_inicio=NULL, ultimo_heartbeat=NULL WHERE auth_key=?`, [auth_key.trim().toUpperCase()]);
     }
 
-    // ── HWID: vincula na 1ª vez, bloqueia se PC diferente ───────────────────
+    // HWID: vincula na 1ª vez, bloqueia se PC diferente
     if (hwid) {
       if (!user.hwid) {
-        // Primeira vez logando — vincula o PC
-        dbRun(`UPDATE auth_users SET hwid=? WHERE username=?`, [hwid, username.trim()]);
-        console.log(`[AUTH] HWID vinculado para ${username}`);
+        dbRun(`UPDATE auth_users SET hwid=? WHERE auth_key=?`, [hwid, auth_key.trim().toUpperCase()]);
       } else if (user.hwid !== hwid) {
-        // PC diferente — bloqueia e alerta via DM no Discord
-        dbRun(
-          `UPDATE auth_users SET hwid_tentativas = hwid_tentativas + 1 WHERE username=?`,
-          [username.trim()]
-        );
-        dbRun(`INSERT INTO auth_logs (username, acao) VALUES (?,?)`,
-          [username.trim(), `hwid_bloqueado_${hwid.substring(0, 8)}`]
-        );
-
-        // Envia DM para o dono da conta avisando a tentativa
-        if (user.discord_id) {
-          _enviarDMHwidAlerta(user, hwid).catch(() => {});
-        }
-
+        // PC diferente — manda DM de alerta
+        if (user.discord_id) _dmHwidAlerta(user, hwid);
         return jsonResponse(res, 403, {
           success: false,
-          message: 'Este software já está vinculado a outro computador. Contate o suporte no Discord.',
+          message: 'Esta Auth Key já está vinculada a outro computador. Fale com o staff.',
         });
       }
     }
 
-    dbRun(
-      `UPDATE auth_users SET ultimo_login=datetime('now','localtime') WHERE username=?`,
-      [username.trim()]
-    );
-    dbRun(`INSERT INTO auth_logs (username, acao) VALUES (?,?)`, [username.trim(), 'login']);
+    // Calcula tempo restante
+    const limSeg  = user.limite_segundos || 86400;
+    const usoSeg  = user.uso_segundos    || 0;
+    const restSeg = Math.max(0, limSeg - usoSeg);
+    const horas   = Math.floor(restSeg / 3600);
+    const minutos = Math.floor((restSeg % 3600) / 60);
 
-    const sessionid = generateSession();
+    dbRun(`UPDATE auth_users SET ultimo_heartbeat=datetime('now') WHERE auth_key=?`, [auth_key.trim().toUpperCase()]);
+    dbRun(`INSERT INTO auth_logs (username, acao) VALUES (?,?)`, [user.username, 'activate']);
 
-    // Resposta idêntica à estrutura do KeyAuth para máxima compatibilidade no C#
     return jsonResponse(res, 200, {
       success:   true,
-      sessionid,
-      message:   'Login efetuado com sucesso!',
+      sessionid: generateSession(),
+      message:   'Auth Key ativada com sucesso!',
       info: {
-        username:      user.username,
-        ip:            req.socket?.remoteAddress || '',
-        hwid:          user.hwid || hwid || '',
-        createdate:    user.criado_em,
-        lastlogin:     user.ultimo_login || user.criado_em,
-        subscriptions: [
-          {
-            subscription: user.plan,
-            expiry:       user.expiry || 'permanent',
-            timeleft:     '',
-          },
-        ],
+        username:       user.username,
+        nome_completo:  user.nome_completo,
+        auth_key:       user.auth_key,
+        hwid:           user.hwid || hwid || '',
+        createdate:     user.criado_em,
+        tempo_restante: `${horas}h ${minutos}m`,
+        uso_segundos:   usoSeg,
+        subscriptions:  [{ subscription: 'alpha_xit', expiry: user.expiry_adm || 'uso_ativo', timeleft: `${horas}h ${minutos}m` }],
       },
     });
   }
 
-  // ── POST /auth/register ────────────────────────────────────────────────────
-  // Chamado pelo bot Discord internamente ao aprovar plano
-  if (url === '/auth/register' && method === 'POST') {
-    const { username, password, plan, discord_id, bot_secret } = body;
+  // ── POST /auth/heartbeat ───────────────────────────────────────────────────
+  // C# envia a cada 60s enquanto o painel está aberto — conta tempo de uso
+  if (url === '/auth/heartbeat' && method === 'POST') {
+    const { auth_key } = body;
+    if (!auth_key) return jsonResponse(res, 400, { success: false, message: 'Auth Key obrigatória.' });
 
-    if (bot_secret !== (process.env.AUTH_BOT_SECRET || 'alpha_xit_bot_2024')) {
-      return jsonResponse(res, 403, { success: false, message: 'Acesso não autorizado.' });
+    const user = dbGet(`SELECT * FROM auth_users WHERE auth_key=?`, [auth_key.trim().toUpperCase()]);
+    if (!user) return jsonResponse(res, 401, { success: false, message: 'Auth Key inválida.' });
+
+    // Verifica expiração ADM
+    if (user.expiry_adm && new Date(user.expiry_adm) < new Date()) {
+      return jsonResponse(res, 403, { success: false, message: 'Sua licença expirou. Fale com o staff.' });
     }
 
-    if (!username || !password) {
-      return jsonResponse(res, 400, { success: false, message: 'Usuário e senha obrigatórios.' });
+    // Verifica cooldown
+    if (user.cooldown_inicio) {
+      const fimCooldown = new Date(user.cooldown_inicio);
+      fimCooldown.setDate(fimCooldown.getDate() + 30);
+      if (new Date() < fimCooldown) {
+        const dias = Math.ceil((fimCooldown - new Date()) / (1000 * 60 * 60 * 24));
+        return jsonResponse(res, 403, { success: false, message: `Cooldown ativo — disponível em ${dias} dia(s).` });
+      }
+      dbRun(`UPDATE auth_users SET uso_segundos=0, cooldown_inicio=NULL, ultimo_heartbeat=NULL WHERE auth_key=?`, [auth_key.trim().toUpperCase()]);
     }
 
-    if (!/^[a-zA-Z0-9_.-]{3,32}$/.test(username)) {
-      return jsonResponse(res, 400, {
+    // Conta segundos desde o último heartbeat
+    const agora = new Date();
+    let segundosAdicionados = 0;
+    if (user.ultimo_heartbeat) {
+      const diff = Math.floor((agora - new Date(user.ultimo_heartbeat)) / 1000);
+      segundosAdicionados = Math.min(diff, 70); // tolerância 10s
+    }
+
+    const limSeg  = user.limite_segundos || 86400;
+    const novoUso = (user.uso_segundos || 0) + segundosAdicionados;
+
+    if (novoUso >= limSeg) {
+      // Esgotou — inicia cooldown
+      dbRun(
+        `UPDATE auth_users SET uso_segundos=?, cooldown_inicio=?, ultimo_heartbeat=? WHERE auth_key=?`,
+        [limSeg, agora.toISOString(), agora.toISOString(), auth_key.trim().toUpperCase()]
+      );
+      // DM avisando
+      if (user.discord_id) _dmUsoEsgotado(user);
+      return jsonResponse(res, 200, {
         success: false,
-        message: 'Nome de usuário inválido. Use letras, números, _ ou . (3–32 caracteres).',
+        esgotado: true,
+        message: 'Suas 24h foram utilizadas! Cooldown de 30 dias iniciado. O painel será encerrado.',
       });
     }
 
-    const existing = dbGet(`SELECT id FROM auth_users WHERE username=?`, [username.trim()]);
-    if (existing) {
-      return jsonResponse(res, 409, { success: false, message: 'Esse nome de usuário já está em uso.' });
-    }
+    dbRun(
+      `UPDATE auth_users SET uso_segundos=?, ultimo_heartbeat=? WHERE auth_key=?`,
+      [novoUso, agora.toISOString(), auth_key.trim().toUpperCase()]
+    );
 
-    // Bloqueia se esse discord_id já tem conta (1 conta por Discord)
-    if (discord_id) {
-      const existeDiscord = dbGet(`SELECT username FROM auth_users WHERE discord_id=?`, [discord_id]);
-      if (existeDiscord) {
-        return jsonResponse(res, 409, {
-          success: false,
-          message: `Este Discord já possui a conta \`${existeDiscord.username}\` cadastrada.`,
-        });
-      }
-    }
-
-    const planMap = { gratis: 1, mensal: 30, anual: 365, permanente: -1 };
-    const dias    = planMap[plan] ?? 1;
-    let expiry;
-    if (dias === -1) {
-      expiry = 'permanent';
-    } else {
-      const d = new Date();
-      d.setDate(d.getDate() + dias);
-      expiry = d.toISOString();
-    }
-
-    try {
-      dbRun(
-        `INSERT INTO auth_users (username, password_hash, plan, expiry, discord_id) VALUES (?,?,?,?,?)`,
-        [username.trim(), hashPassword(password), plan || 'gratis', expiry, discord_id || null]
-      );
-      dbRun(`INSERT INTO auth_logs (username, acao) VALUES (?,?)`, [username.trim(), 'register']);
-    } catch (err) {
-      return jsonResponse(res, 500, { success: false, message: 'Erro ao criar conta: ' + err.message });
-    }
-
+    const restSeg = limSeg - novoUso;
     return jsonResponse(res, 200, {
-      success:  true,
-      message:  'Conta criada com sucesso!',
-      username: username.trim(),
-      plan:     plan || 'gratis',
-      expiry,
+      success: true,
+      uso_segundos:      novoUso,
+      segundos_restantes: restSeg,
+      tempo_restante:    `${Math.floor(restSeg/3600)}h ${Math.floor((restSeg%3600)/60)}m`,
     });
   }
 
   // ── POST /auth/log ─────────────────────────────────────────────────────────
-  // Equivalente ao KeyAuthApp.log(msg) no C#
   if (url === '/auth/log' && method === 'POST') {
     const { username, message: msg } = body;
-    if (username) {
-      dbRun(`INSERT INTO auth_logs (username, acao) VALUES (?,?)`, [username, msg || 'log']);
-    }
+    if (username) dbRun(`INSERT INTO auth_logs (username, acao) VALUES (?,?)`, [username, msg || 'log']);
     return jsonResponse(res, 200, { success: true });
-  }
-
-  // ── GET /auth/check/:username ──────────────────────────────────────────────
-  if (url.startsWith('/auth/check/') && method === 'GET') {
-    const username = decodeURIComponent(url.replace('/auth/check/', ''));
-    const user = dbGet(
-      `SELECT username, plan, expiry, criado_em FROM auth_users WHERE username=?`,
-      [username]
-    );
-    if (!user) return jsonResponse(res, 404, { success: false, message: 'Usuário não encontrado.' });
-    return jsonResponse(res, 200, { success: true, user });
   }
 
   // ── GET /auth/users ────────────────────────────────────────────────────────
   if (url === '/auth/users' && method === 'GET') {
-    const users = dbQuery(
-      `SELECT username, plan, expiry, discord_id, hwid, criado_em, ultimo_login
+    const stmt = dbInstance.prepare(
+      `SELECT username, discord_tag, nome_completo, auth_key, uso_segundos,
+              limite_segundos, cooldown_inicio, expiry_adm, hwid, criado_em
        FROM auth_users ORDER BY id DESC LIMIT 100`
     );
+    const users = [];
+    while (stmt.step()) users.push(stmt.getAsObject());
+    stmt.free();
     return jsonResponse(res, 200, { success: true, count: users.length, users });
-  }
-
-  // ── POST /auth/hwid-check ──────────────────────────────────────────────────
-  // C# chama isso antes do registro para ver se o PC já tem conta
-  if (url === '/auth/hwid-check' && method === 'POST') {
-    const { hwid, discord_id } = body;
-    if (!hwid) return jsonResponse(res, 400, { success: false, message: 'HWID obrigatório.' });
-
-    const user = dbGet(`SELECT username, plan, expiry, discord_id FROM auth_users WHERE hwid=?`, [hwid]);
-    if (user) {
-      // PC já tem conta — notifica via DM se discord_id fornecido
-      if (discord_id && discord_id !== user.discord_id) {
-        _enviarDMHwidTentativaCriar({ ...user, hwid }, discord_id).catch(() => {});
-      }
-      return jsonResponse(res, 409, {
-        success: false,
-        message: 'Este computador já possui uma conta registrada. Acesse com suas credenciais.',
-        bloqueado: true,
-      });
-    }
-    return jsonResponse(res, 200, { success: true, message: 'PC liberado para registro.' });
   }
 
   return jsonResponse(res, 404, { success: false, message: 'Endpoint não encontrado.' });
 }
 
-// ── DM: alerta de tentativa de login em PC diferente ────────────────────────
-async function _enviarDMHwidAlerta(user, hwidTentativa) {
+// ── DM: aviso de HWID diferente ───────────────────────────────────────────
+async function _dmHwidAlerta(user, hwidTentativa) {
   try {
-    const { Client } = require('discord.js');
-    // Acessa o client global exposto no processo
     const client = global._discordClient;
     if (!client) return;
-
-    const discordUser = await client.users.fetch(user.discord_id);
     const { EmbedBuilder } = require('discord.js');
-
+    const discordUser = await client.users.fetch(user.discord_id);
     await discordUser.send({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(0xE74C3C)
-          .setTitle('🚨 Tentativa de login em outro PC detectada!')
-          .setDescription(
-            `Alguém tentou fazer login na sua conta **Alpha Xit** em um computador diferente!\n\n` +
-            `> 👤 **Sua conta:** \`${user.username}\`\n` +
-            `> 🖥️ **PC bloqueado:** \`${hwidTentativa.substring(0, 16)}...\`\n` +
-            `> 🕐 **Horário:** ${new Date().toLocaleString('pt-BR')}\n\n` +
-            `**Se não foi você**, sua senha está segura mas fique atento.\n` +
-            `**Se foi você** e quer trocar de PC, contate o **staff** no Discord.`
-          )
-          .setFooter({ text: 'Alpha Xit Auth • Segurança' })
-          .setTimestamp(),
+      embeds: [new EmbedBuilder()
+        .setColor(0xE74C3C)
+        .setTitle('🚨 Tentativa de uso em outro PC!')
+        .setDescription(
+          `Alguém tentou usar sua **Auth Key** em outro computador!\n\n` +
+          `> 🔑 **Sua key:** \`${user.auth_key}\`\n` +
+          `> 🕐 **Horário:** ${new Date().toLocaleString('pt-BR')}\n\n` +
+          `Se não foi você, sua key está segura (o acesso foi bloqueado).\n` +
+          `Se quer trocar de PC, fale com o **staff**.`
+        )
+        .setFooter({ text: 'Alpha Xit Auth • Segurança' })
+        .setTimestamp()
       ],
     });
   } catch (_) {}
 }
 
-// ── DM: avisa o dono quando outro Discord tenta criar conta no mesmo PC ──────
-async function _enviarDMHwidTentativaCriar(user, discordIdTentativa) {
+// ── DM: aviso de 24h esgotadas ────────────────────────────────────────────
+async function _dmUsoEsgotado(user) {
   try {
     const client = global._discordClient;
-    if (!client || !user.discord_id) return;
-
-    const discordUser = await client.users.fetch(user.discord_id);
+    if (!client) return;
     const { EmbedBuilder } = require('discord.js');
-
+    const discordUser = await client.users.fetch(user.discord_id);
     await discordUser.send({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(0xF39C12)
-          .setTitle('⚠️ Alguém tentou criar uma conta no seu PC!')
-          .setDescription(
-            `Um usuário diferente tentou criar uma nova conta no **mesmo computador** que a sua conta está vinculada.\n\n` +
-            `> 👤 **Sua conta:** \`${user.username}\`\n` +
-            `> 📦 **Seu plano:** ${_nomePlano(user.plan)}\n` +
-            `> 🕐 **Horário:** ${new Date().toLocaleString('pt-BR')}\n\n` +
-            `O registro foi **bloqueado automaticamente**.\n` +
-            `Se você quer ceder seu acesso ou trocar de PC, contate o **staff**.`
-          )
-          .setFooter({ text: 'Alpha Xit Auth • Segurança' })
-          .setTimestamp(),
+      embeds: [new EmbedBuilder()
+        .setColor(0xF39C12)
+        .setTitle('⏱️ Suas 24h foram utilizadas!')
+        .setDescription(
+          `Olá, **${user.nome_completo}**!\n\n` +
+          `Você utilizou todas as suas **24 horas** de acesso ativo.\n\n` +
+          `> 🔄 **Cooldown:** 30 dias\n` +
+          `> 📅 **Disponível em:** ${(() => { const d = new Date(); d.setDate(d.getDate()+30); return d.toLocaleDateString('pt-BR'); })()}\n\n` +
+          `Após o cooldown, suas 24h serão renovadas automaticamente.\n` +
+          `O software foi encerrado.`
+        )
+        .setFooter({ text: 'Alpha Xit Auth' })
+        .setTimestamp()
       ],
     });
   } catch (_) {}
-}
-
-function _nomePlano(plan) {
-  const nomes = { gratis: '🆓 Grátis', mensal: '📅 Mensal', anual: '📆 Anual', permanente: '♾️ Permanente' };
-  return nomes[plan] || plan;
 }
 
 module.exports = { handleAuthRequest, hashPassword };
