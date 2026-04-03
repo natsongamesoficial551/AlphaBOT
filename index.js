@@ -4,6 +4,8 @@ console.log('=== ALPHABOT DEBUG ===');
 console.log('[1] dotenv carregado');
 console.log('[ENV] TOKEN:', process.env.DISCORD_TOKEN ? `✅ (${process.env.DISCORD_TOKEN.length} chars)` : '❌ VAZIO');
 console.log('[ENV] GUILD:', process.env.GUILD_ID || '❌ VAZIO');
+console.log('[ENV] TURSO_URL:', process.env.TURSO_URL || '❌ VAZIO');
+console.log('[ENV] TURSO_TOKEN:', process.env.TURSO_TOKEN ? `✅ (${process.env.TURSO_TOKEN.length} chars)` : '❌ VAZIO');
 console.log('[ENV] NODE_VERSION:', process.version);
 
 // HTTP primeiro — Render precisa de porta
