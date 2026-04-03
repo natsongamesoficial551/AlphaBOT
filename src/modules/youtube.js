@@ -17,26 +17,23 @@ function ytUrlToRSS(url) {
   }
 
   // Formato: @handle — usa channel_id via variável de ambiente YOUTUBE_CHANNEL_ID
-  // Se YOUTUBE_CHANNEL_ID estiver definido, usa ele diretamente (mais confiável)
   const handleMatch = url.match(/@([\w-]+)/);
   if (handleMatch) {
     const channelId = process.env.YOUTUBE_CHANNEL_ID;
     if (channelId) {
       return `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`;
     }
-    // Fallback: tenta como user (pode não funcionar para handles novos)
-    console.warn('[YT] ⚠️  Handle @' + handleMatch[1] + ' detectado mas YOUTUBE_CHANNEL_ID não definido. Defina YOUTUBE_CHANNEL_ID=UCxxxxxxxx no Render para garantir funcionamento.');
+    console.warn('[YT] ⚠️  Handle @' + handleMatch[1] + ' detectado mas YOUTUBE_CHANNEL_ID não definido.');
     return `https://www.youtube.com/feeds/videos.xml?user=${handleMatch[1]}`;
   }
 
   return null;
 }
 
-async function checkYouTube(client, primeiroCheck = false) {
+async function checkYouTube(client) {
   const guildId = process.env.GUILD_ID;
   if (!guildId) return;
 
-  // ✅ CORRIGIDO: getYTConfig é async — precisa de await
   const config  = await db.getYTConfig(guildId);
   const ytUrl   = config?.yt_url || process.env.YOUTUBE_CHANNEL_URL;
   const canalId = config?.canal_id;
@@ -54,7 +51,7 @@ async function checkYouTube(client, primeiroCheck = false) {
     feed = await parser.parseURL(rssUrl);
   } catch (err) {
     if (err.message.includes('404')) {
-      console.warn('[YT] ⚠️  RSS 404 — use o ID do canal: youtube.com/channel/UCxxxxxxxx ou defina YOUTUBE_CHANNEL_ID no Render');
+      console.warn('[YT] ⚠️  RSS 404 — use o ID do canal: youtube.com/channel/UCxxxxxxxx');
     } else {
       console.error('[YT] Erro ao buscar RSS:', err.message);
     }
@@ -67,25 +64,14 @@ async function checkYouTube(client, primeiroCheck = false) {
   const videoId     = latestVideo.id || latestVideo.guid || latestVideo.link;
   const ultimoId    = config?.ultimo_video_id;
 
-  // Primeiro check do boot — só salva o ID, não posta
-  if (primeiroCheck || !ultimoId) {
-    if (videoId !== ultimoId) {
-      // ✅ CORRIGIDO: updateUltimoVideo é async — precisa de await
-      await db.updateUltimoVideo(guildId, videoId);
-      console.log(`[YT] Boot — vídeo mais recente salvo: ${latestVideo.title}`);
-    } else {
-      console.log('[YT] Boot — nenhum vídeo novo.');
-    }
-    return;
-  }
-
-  // Checks subsequentes — só posta se for vídeo diferente
+  // ✅ NOVA LÓGICA: Se o vídeo mais recente for diferente do salvo no banco, POSTA.
+  // Isso cobre tanto o boot (se o bot estava desligado quando saiu vídeo) quanto o poller normal.
   if (videoId === ultimoId) {
     console.log('[YT] Sem vídeo novo.');
     return;
   }
 
-  // ✅ CORRIGIDO: updateUltimoVideo é async — precisa de await
+  // Atualiza o banco IMEDIATAMENTE para evitar postagens duplicadas se o poller rodar rápido
   await db.updateUltimoVideo(guildId, videoId);
 
   const guild = client.guilds.cache.get(guildId);
@@ -95,7 +81,10 @@ async function checkYouTube(client, primeiroCheck = false) {
     ? guild.channels.cache.get(canalId)
     : guild.channels.cache.find(c => c.name === '▶️・novos-videos');
 
-  if (!canal) return;
+  if (!canal) {
+    console.warn('[YT] Canal de postagem não encontrado.');
+    return;
+  }
 
   const videoIdClean = videoId.includes('watch?v=')
     ? videoId.split('watch?v=')[1]
@@ -118,7 +107,7 @@ async function checkYouTube(client, primeiroCheck = false) {
       content: `${mencao} 🎬 Novo vídeo publicado!`.trim(),
       embeds: [embedNovoVideo(video)],
     });
-    console.log(`[YT] ✅ Novo vídeo postado: ${video.title}`);
+    console.log(`[YT] ✅ Vídeo postado: ${video.title}`);
   } catch (err) {
     console.error('[YT] Erro ao postar:', err.message);
   }
@@ -128,11 +117,12 @@ function startYouTubePoller(client) {
   const intervalMin = parseInt(process.env.YOUTUBE_CHECK_INTERVAL) || 10;
   console.log(`[YT] Poller iniciado — checando a cada ${intervalMin} min`);
 
-  // Primeiro check: só salva o ID mais recente, NÃO posta
-  setTimeout(() => checkYouTube(client, true), 10_000);
+  // ✅ Primeiro check: Roda 10 segundos após o boot.
+  // Se o vídeo mais recente do canal não estiver no banco, ele posta na hora.
+  setTimeout(() => checkYouTube(client), 10_000);
 
-  // Checks subsequentes: posta se houver vídeo novo
-  setInterval(() => checkYouTube(client, false), intervalMin * 60 * 1000);
+  // Checks subsequentes:
+  setInterval(() => checkYouTube(client), intervalMin * 60 * 1000);
 }
 
 module.exports = { startYouTubePoller };
