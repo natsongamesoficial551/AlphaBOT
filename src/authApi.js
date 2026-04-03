@@ -11,12 +11,9 @@
  */
 
 const crypto = require('crypto');
-const fs     = require('fs');
-const path   = require('path');
 
-const DB_PATH = process.env.DB_PATH
-  ? path.resolve(process.env.DB_PATH)
-  : path.join(__dirname, '..', 'data', 'alphabot.db');
+// Usa SEMPRE a instância compartilhada do database.js — nunca abre uma 2ª instância
+const db = require('./database');
 
 function hashPassword(password) {
   const salt = process.env.AUTH_SALT || 'alphaxitsalt2024';
@@ -40,7 +37,7 @@ function jsonResponse(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-async function handleAuthRequest(req, res, dbInstance) {
+async function handleAuthRequest(req, res) {
   const url    = req.url.split('?')[0];
   const method = req.method;
 
@@ -52,18 +49,9 @@ async function handleAuthRequest(req, res, dbInstance) {
   let body = {};
   if (method === 'POST') body = await readBody(req);
 
-  function dbSave() {
-    fs.writeFileSync(DB_PATH, Buffer.from(dbInstance.export()));
-  }
-  function dbRun(sql, params = []) { dbInstance.run(sql, params); dbSave(); }
-  function dbGet(sql, params = []) {
-    const stmt = dbInstance.prepare(sql); stmt.bind(params);
-    let row = null; if (stmt.step()) row = stmt.getAsObject(); stmt.free(); return row;
-  }
-
   // ── GET /auth/health ───────────────────────────────────────────────────────
   if (url === '/auth/health' && method === 'GET') {
-    const total = dbGet(`SELECT COUNT(*) as c FROM auth_users`)?.c || 0;
+    const total = db.get(`SELECT COUNT(*) as c FROM auth_users`)?.c || 0;
     return jsonResponse(res, 200, { success: true, message: 'Alpha Xit Auth API online', users: total });
   }
 
@@ -90,7 +78,7 @@ async function handleAuthRequest(req, res, dbInstance) {
     }
 
     // Busca por Auth Key
-    const user = dbGet(`SELECT * FROM auth_users WHERE auth_key=?`, [auth_key.trim().toUpperCase()]);
+    const user = db.get(`SELECT * FROM auth_users WHERE auth_key=?`, [auth_key.trim().toUpperCase()]);
 
     if (!user) {
       return jsonResponse(res, 401, { success: false, message: 'Auth Key inválida ou não encontrada.' });
@@ -123,13 +111,13 @@ async function handleAuthRequest(req, res, dbInstance) {
         });
       }
       // Cooldown encerrado — reseta
-      dbRun(`UPDATE auth_users SET uso_segundos=0, cooldown_inicio=NULL, ultimo_heartbeat=NULL WHERE auth_key=?`, [auth_key.trim().toUpperCase()]);
+      db.run(`UPDATE auth_users SET uso_segundos=0, cooldown_inicio=NULL, ultimo_heartbeat=NULL WHERE auth_key=?`, [auth_key.trim().toUpperCase()]);
     }
 
     // HWID: vincula na 1ª vez, bloqueia se PC diferente
     if (hwid) {
       if (!user.hwid) {
-        dbRun(`UPDATE auth_users SET hwid=? WHERE auth_key=?`, [hwid, auth_key.trim().toUpperCase()]);
+        db.run(`UPDATE auth_users SET hwid=? WHERE auth_key=?`, [hwid, auth_key.trim().toUpperCase()]);
       } else if (user.hwid !== hwid) {
         // PC diferente — manda DM de alerta
         if (user.discord_id) _dmHwidAlerta(user, hwid);
@@ -147,8 +135,8 @@ async function handleAuthRequest(req, res, dbInstance) {
     const horas   = Math.floor(restSeg / 3600);
     const minutos = Math.floor((restSeg % 3600) / 60);
 
-    dbRun(`UPDATE auth_users SET ultimo_heartbeat=datetime('now') WHERE auth_key=?`, [auth_key.trim().toUpperCase()]);
-    dbRun(`INSERT INTO auth_logs (username, acao) VALUES (?,?)`, [user.username, 'activate']);
+    db.run(`UPDATE auth_users SET ultimo_heartbeat=datetime('now') WHERE auth_key=?`, [auth_key.trim().toUpperCase()]);
+    db.run(`INSERT INTO auth_logs (username, acao) VALUES (?,?)`, [user.username, 'activate']);
 
     return jsonResponse(res, 200, {
       success:   true,
@@ -173,7 +161,7 @@ async function handleAuthRequest(req, res, dbInstance) {
     const { auth_key } = body;
     if (!auth_key) return jsonResponse(res, 400, { success: false, message: 'Auth Key obrigatória.' });
 
-    const user = dbGet(`SELECT * FROM auth_users WHERE auth_key=?`, [auth_key.trim().toUpperCase()]);
+    const user = db.get(`SELECT * FROM auth_users WHERE auth_key=?`, [auth_key.trim().toUpperCase()]);
     if (!user) return jsonResponse(res, 401, { success: false, message: 'Auth Key inválida.' });
 
     // Verifica expiração ADM
@@ -189,7 +177,7 @@ async function handleAuthRequest(req, res, dbInstance) {
         const dias = Math.ceil((fimCooldown - new Date()) / (1000 * 60 * 60 * 24));
         return jsonResponse(res, 403, { success: false, message: `Cooldown ativo — disponível em ${dias} dia(s).` });
       }
-      dbRun(`UPDATE auth_users SET uso_segundos=0, cooldown_inicio=NULL, ultimo_heartbeat=NULL WHERE auth_key=?`, [auth_key.trim().toUpperCase()]);
+      db.run(`UPDATE auth_users SET uso_segundos=0, cooldown_inicio=NULL, ultimo_heartbeat=NULL WHERE auth_key=?`, [auth_key.trim().toUpperCase()]);
     }
 
     // Conta segundos desde o último heartbeat
@@ -205,7 +193,7 @@ async function handleAuthRequest(req, res, dbInstance) {
 
     if (novoUso >= limSeg) {
       // Esgotou — inicia cooldown
-      dbRun(
+      db.run(
         `UPDATE auth_users SET uso_segundos=?, cooldown_inicio=?, ultimo_heartbeat=? WHERE auth_key=?`,
         [limSeg, agora.toISOString(), agora.toISOString(), auth_key.trim().toUpperCase()]
       );
@@ -218,7 +206,7 @@ async function handleAuthRequest(req, res, dbInstance) {
       });
     }
 
-    dbRun(
+    db.run(
       `UPDATE auth_users SET uso_segundos=?, ultimo_heartbeat=? WHERE auth_key=?`,
       [novoUso, agora.toISOString(), auth_key.trim().toUpperCase()]
     );
@@ -235,20 +223,17 @@ async function handleAuthRequest(req, res, dbInstance) {
   // ── POST /auth/log ─────────────────────────────────────────────────────────
   if (url === '/auth/log' && method === 'POST') {
     const { username, message: msg } = body;
-    if (username) dbRun(`INSERT INTO auth_logs (username, acao) VALUES (?,?)`, [username, msg || 'log']);
+    if (username) db.run(`INSERT INTO auth_logs (username, acao) VALUES (?,?)`, [username, msg || 'log']);
     return jsonResponse(res, 200, { success: true });
   }
 
   // ── GET /auth/users ────────────────────────────────────────────────────────
   if (url === '/auth/users' && method === 'GET') {
-    const stmt = dbInstance.prepare(
+    const users = db.query(
       `SELECT username, discord_tag, nome_completo, auth_key, uso_segundos,
               limite_segundos, cooldown_inicio, expiry_adm, hwid, criado_em
        FROM auth_users ORDER BY id DESC LIMIT 100`
     );
-    const users = [];
-    while (stmt.step()) users.push(stmt.getAsObject());
-    stmt.free();
     return jsonResponse(res, 200, { success: true, count: users.length, users });
   }
 

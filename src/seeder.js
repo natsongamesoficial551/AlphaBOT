@@ -78,16 +78,18 @@ async function seedCanalById(guild, tipo, canalId, buildFn) {
   }
 
   const existing = getMsgFixa(guild.id, tipo);
+
+  // Verifica se a mensagem ainda existe no Discord antes de reenviar
   if (existing) {
     try {
-      // Tenta apagar a mensagem antiga para mandar uma nova limpa
-      const oldMsg = await canal.messages.fetch(existing.message_id);
-      await oldMsg.delete();
-      console.log(`[SEED] 🗑️ ${tipo} antiga deletada, reenviando...`);
+      await canal.messages.fetch(existing.message_id);
+      console.log(`[SEED] ✓ ${tipo} já existe — skip`);
+      return;
     } catch {
-      console.log(`[SEED] ↻ ${tipo} mensagem antiga não encontrada, reenviando...`);
+      // Mensagem sumiu do canal, remove do DB e reenvia
+      deleteMsgFixa(guild.id, tipo);
+      console.log(`[SEED] ↻ ${tipo} sumiu do canal, reenviando...`);
     }
-    deleteMsgFixa(guild.id, tipo);
   }
 
   const payload = buildFn();

@@ -15,9 +15,7 @@ http.createServer(async (req, res) => {
   // ── Rotas da API de Auth própria ──────────────────────
   if (req.url.startsWith('/auth')) {
     const { handleAuthRequest } = require('./src/authApi');
-    const { getDB } = require('./src/database');
-    const db = await getDB();
-    return handleAuthRequest(req, res, db);
+    return handleAuthRequest(req, res);
   }
   // ── Health check padrão Render ────────────────────────
   res.writeHead(200);
