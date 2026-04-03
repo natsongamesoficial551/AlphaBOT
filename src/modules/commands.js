@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags } = require('discord.js');
+const { SlashCommandBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags, AttachmentBuilder } = require('discord.js');
 const db = require('../database');
 const { embedProduto, embedProdutoFree, embedListaProdutos, embedPedidosAbertos, embedErro, embedSucesso, embedLog,
         embedPedidoConfirmado, embedEntregaProduto, embedSaldo, embedExtrato, embedCoinRecebido } = require('../embeds');
@@ -37,7 +37,7 @@ const commands = [
     .addStringOption(o => o.setName('nome').setDescription('Nome do produto').setRequired(true))
     .addIntegerOption(o => o.setName('preco_coins').setDescription('Preço em XIT Coins (ex: 250)').setRequired(true))
     .addStringOption(o => o.setName('descricao').setDescription('Descrição do produto').setRequired(true))
-    .addStringOption(o => o.setName('link').setDescription('Link de entrega do produto').setRequired(false)),
+    .addAttachmentOption(o => o.setName('arquivo').setDescription('Arquivo do produto (zip, pdf, etc.) para entrega na DM').setRequired(false)),
 
   new SlashCommandBuilder()
     .setName('produto-add-free')
@@ -45,7 +45,8 @@ const commands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
     .addStringOption(o => o.setName('nome').setDescription('Nome do produto').setRequired(true))
     .addStringOption(o => o.setName('descricao').setDescription('Descrição do produto').setRequired(true))
-    .addStringOption(o => o.setName('link').setDescription('Link de acesso gratuito').setRequired(false)),
+    .addAttachmentOption(o => o.setName('arquivo').setDescription('Arquivo do produto (zip, pdf, etc.) para entrega na DM').setRequired(false))
+    .addStringOption(o => o.setName('link').setDescription('Link de acesso gratuito (alternativo ao arquivo)').setRequired(false)),
 
   new SlashCommandBuilder()
     .setName('produto-listar')
@@ -158,9 +159,14 @@ async function handleCommand(interaction) {
       const nome       = interaction.options.getString('nome');
       const precoCoins = interaction.options.getInteger('preco_coins');
       const descricao  = interaction.options.getString('descricao');
-      const link       = interaction.options.getString('link') || '';
+      const arquivo    = interaction.options.getAttachment('arquivo');
 
-      const produto = db.addProduto(nome, descricao, 'coins', precoCoins, link, '', 'pago', 'pago');
+      // Salva a URL CDN do Discord no campo link, e o nome do arquivo em imagem_url
+      // (reutilizamos imagem_url para guardar o nome original do arquivo)
+      const linkArquivo  = arquivo ? arquivo.url        : '';
+      const nomeArquivo  = arquivo ? arquivo.name       : '';
+
+      const produto = await db.addProduto(nome, descricao, 'coins', precoCoins, linkArquivo, nomeArquivo, 'pago', 'pago');
       if (!produto) return interaction.editReply({ embeds: [embedErro('Erro ao salvar produto no banco.')] });
 
       const canal = guild.channels.cache.get(CANAL_PAGO_ID);
@@ -170,9 +176,13 @@ async function handleCommand(interaction) {
 
       const { embed, row } = embedProduto(produto);
       const msg = await canal.send({ embeds: [embed], components: [row] });
-      db.saveProdutoMsg(produto.id, msg.id, canal.id);
+      await db.saveProdutoMsg(produto.id, msg.id, canal.id);
 
-      await interaction.editReply({ embeds: [embedSucesso(`Produto **${nome}** publicado em <#${canal.id}>! ID: \`#${produto.id}\``)] });
+      const infoArquivo = arquivo
+        ? `\n📎 Arquivo: \`${nomeArquivo}\` — será enviado via DM na entrega.`
+        : '\n⚠️ Nenhum arquivo anexado — entrega sem arquivo.';
+
+      await interaction.editReply({ embeds: [embedSucesso(`Produto **${nome}** publicado em <#${canal.id}>! ID: \`#${produto.id}\`${infoArquivo}`)] });
       _log(guild, 'admin', `Produto **${nome}** (ID #${produto.id}) adicionado por <@${user.id}>`, user.id);
       return;
     }
@@ -183,9 +193,14 @@ async function handleCommand(interaction) {
 
       const nome      = interaction.options.getString('nome');
       const descricao = interaction.options.getString('descricao');
-      const link      = interaction.options.getString('link') || '';
+      const arquivo   = interaction.options.getAttachment('arquivo');
+      const linkTexto = interaction.options.getString('link') || '';
 
-      const produto = db.addProduto(nome, descricao, 'Grátis', 0, link, '', 'free', 'free');
+      // Arquivo tem prioridade sobre link de texto
+      const linkArquivo = arquivo ? arquivo.url  : linkTexto;
+      const nomeArquivo = arquivo ? arquivo.name : '';
+
+      const produto = await db.addProduto(nome, descricao, 'Grátis', 0, linkArquivo, nomeArquivo, 'free', 'free');
       if (!produto) return interaction.editReply({ embeds: [embedErro('Erro ao salvar produto no banco.')] });
 
       const canal = guild.channels.cache.get(CANAL_FREE_ID);
@@ -195,9 +210,15 @@ async function handleCommand(interaction) {
 
       const { embed, row } = embedProdutoFree(produto);
       const msg = await canal.send({ embeds: [embed], components: [row] });
-      db.saveProdutoMsg(produto.id, msg.id, canal.id);
+      await db.saveProdutoMsg(produto.id, msg.id, canal.id);
 
-      await interaction.editReply({ embeds: [embedSucesso(`Produto gratuito **${nome}** publicado em <#${canal.id}>! ID: \`#${produto.id}\``)] });
+      const infoEntrega = arquivo
+        ? `\n📎 Arquivo: \`${nomeArquivo}\` — será enviado via DM.`
+        : linkTexto
+          ? `\n🔗 Link configurado.`
+          : '\n⚠️ Nenhum arquivo ou link configurado.';
+
+      await interaction.editReply({ embeds: [embedSucesso(`Produto gratuito **${nome}** publicado em <#${canal.id}>! ID: \`#${produto.id}\`${infoEntrega}`)] });
       _log(guild, 'admin', `Produto gratuito **${nome}** (ID #${produto.id}) adicionado por <@${user.id}>`, user.id);
       return;
     }
@@ -205,7 +226,7 @@ async function handleCommand(interaction) {
     // ── /produto-listar ───────────────────────────────────
     if (commandName === 'produto-listar') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      const produtos = db.listarProdutos();
+      const produtos = await db.listarProdutos();
       const { embed } = embedListaProdutos(produtos);
       return interaction.editReply({ embeds: [embed] });
     }
@@ -214,9 +235,9 @@ async function handleCommand(interaction) {
     if (commandName === 'produto-deletar') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const id = interaction.options.getInteger('id');
-      const produto = db.getProduto(id);
+      const produto = await db.getProduto(id);
       if (!produto) return interaction.editReply({ embeds: [embedErro(`Produto #${id} não encontrado.`)] });
-      db.deletarProduto(id);
+      await db.deletarProduto(id);
       await interaction.editReply({ embeds: [embedSucesso(`Produto **${produto.nome}** (ID #${id}) removido com sucesso.`)] });
       _log(guild, 'admin', `Produto #${id} removido por <@${user.id}>`, user.id);
       return;
@@ -225,7 +246,7 @@ async function handleCommand(interaction) {
     // ── /pedidos ──────────────────────────────────────────
     if (commandName === 'pedidos') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      const pedidos = db.getPedidosAbertos();
+      const pedidos = await db.getPedidosAbertos();
       const embed = embedPedidosAbertos(pedidos);
       if (!pedidos.length) return interaction.editReply({ embeds: [embed] });
 
@@ -242,11 +263,11 @@ async function handleCommand(interaction) {
     if (commandName === 'confirmar') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const pedidoId = interaction.options.getInteger('pedido_id');
-      const pedido   = db.getPedido(pedidoId);
+      const pedido   = await db.getPedido(pedidoId);
       if (!pedido) return interaction.editReply({ embeds: [embedErro(`Pedido #${pedidoId} não encontrado.`)] });
       if (pedido.status !== 'aguardando') return interaction.editReply({ embeds: [embedErro(`Pedido #${pedidoId} já foi ${pedido.status}.`)] });
 
-      db.confirmarPedido(pedidoId);
+      await db.confirmarPedido(pedidoId);
 
       // Pedido de COIN — credita moedas automaticamente
       if (pedido.produto_nome?.startsWith('COIN-')) {
@@ -255,8 +276,8 @@ async function handleCommand(interaction) {
         if (!validos.includes(quantidade)) {
           return interaction.editReply({ embeds: [embedErro(`Pacote de coin inválido: ${quantidade}`)] });
         }
-        db.adicionarSaldo(pedido.comprador_id, quantidade, `Compra de pacote via PIX (Pedido #${pedidoId})`);
-        const novoSaldo = db.getSaldo(pedido.comprador_id);
+        await db.adicionarSaldo(pedido.comprador_id, quantidade, `Compra de pacote via PIX (Pedido #${pedidoId})`);
+        const novoSaldo = await db.getSaldo(pedido.comprador_id);
 
         try {
           const comprador = await interaction.client.users.fetch(pedido.comprador_id);
@@ -270,14 +291,24 @@ async function handleCommand(interaction) {
       }
 
       // Pedido de PRODUTO normal
-      const produto     = db.getProduto(pedido.produto_id);
+      const produto     = await db.getProduto(pedido.produto_id);
       const nomeProduto = produto?.nome || pedido.produto_nome || 'Produto';
       const linkProduto = produto?.link || null;
+      const nomeArquivo = produto?.imagem_url || null; // nome original do arquivo
 
       try {
         const comprador = await interaction.client.users.fetch(pedido.comprador_id);
         await comprador.send({ embeds: [embedPedidoConfirmado({ nome: nomeProduto }, pedido.comprador_id)] });
-        if (linkProduto) await comprador.send({ embeds: [embedEntregaProduto({ nome: nomeProduto, link: linkProduto })] });
+
+        if (linkProduto) {
+          // Verifica se é URL CDN do Discord (arquivo enviado pelo admin)
+          if (_isDiscordCDN(linkProduto)) {
+            await _enviarArquivoDM(comprador, nomeProduto, linkProduto, nomeArquivo);
+          } else {
+            // Link externo normal (ex: Mediafire)
+            await comprador.send({ embeds: [embedEntregaProduto({ nome: nomeProduto, link: linkProduto })] });
+          }
+        }
       } catch (_) {}
 
       await interaction.editReply({ embeds: [embedSucesso(`Pedido #${pedidoId} de **${nomeProduto}** confirmado e entregue na DM!`)] });
@@ -311,7 +342,7 @@ async function handleCommand(interaction) {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const url   = interaction.options.getString('url');
       const canal = interaction.options.getChannel('canal');
-      db.setYTConfig(guild.id, canal.id, url);
+      await db.setYTConfig(guild.id, canal.id, url);
       await interaction.editReply({ embeds: [embedSucesso(`YouTube configurado!\n🔗 URL: ${url}\n📺 Canal: <#${canal.id}>`)] });
       return;
     }
@@ -365,8 +396,8 @@ async function handleCommand(interaction) {
 
       if (quantidade <= 0) return interaction.editReply({ embeds: [embedErro('A quantidade deve ser maior que 0.')] });
 
-      db.adicionarSaldo(alvo.id, quantidade, motivo);
-      const novoSaldo = db.getSaldo(alvo.id);
+      await db.adicionarSaldo(alvo.id, quantidade, motivo);
+      const novoSaldo = await db.getSaldo(alvo.id);
 
       try {
         const membro = await guild.members.fetch(alvo.id);
@@ -385,13 +416,13 @@ async function handleCommand(interaction) {
       const quantidade = interaction.options.getInteger('quantidade');
       const motivo     = interaction.options.getString('motivo') || 'Removido pelo admin';
 
-      const saldoAtual = db.getSaldo(alvo.id);
+      const saldoAtual = await db.getSaldo(alvo.id);
       if (saldoAtual < quantidade) {
         return interaction.editReply({ embeds: [embedErro(`<@${alvo.id}> só tem **${saldoAtual} 🪙**. Impossível remover **${quantidade} 🪙**.`)] });
       }
 
-      db.removerSaldo(alvo.id, quantidade, motivo);
-      const novoSaldo = db.getSaldo(alvo.id);
+      await db.removerSaldo(alvo.id, quantidade, motivo);
+      const novoSaldo = await db.getSaldo(alvo.id);
 
       await interaction.editReply({ embeds: [embedSucesso(`**${quantidade} 🪙** removidos de <@${alvo.id}>!\nSaldo atual: **${novoSaldo} 🪙**`)] });
       _log(guild, 'admin', `<@${user.id}> removeu ${quantidade} 🪙 de <@${alvo.id}> — ${motivo}`, user.id);
@@ -402,8 +433,8 @@ async function handleCommand(interaction) {
     if (commandName === 'moeda-ver') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const alvo   = interaction.options.getUser('usuario');
-      const saldo  = db.getSaldo(alvo.id);
-      const extrato = db.getExtrato(alvo.id, 5);
+      const saldo  = await db.getSaldo(alvo.id);
+      const extrato = await db.getExtrato(alvo.id, 5);
 
       const { EmbedBuilder: EB } = require('discord.js');
       const embed = new EB()
@@ -426,7 +457,7 @@ async function handleCommand(interaction) {
     // ── /saldo ────────────────────────────────────────────
     if (commandName === 'saldo') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      const saldo  = db.getSaldo(user.id);
+      const saldo  = await db.getSaldo(user.id);
       const membro = await guild.members.fetch(user.id);
       return interaction.editReply({ embeds: [embedSaldo(membro, saldo)] });
     }
@@ -434,7 +465,7 @@ async function handleCommand(interaction) {
     // ── /extrato ──────────────────────────────────────────
     if (commandName === 'extrato') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      const transacoes = db.getExtrato(user.id, 10);
+      const transacoes = await db.getExtrato(user.id, 10);
       const membro = await guild.members.fetch(user.id);
       return interaction.editReply({ embeds: [embedExtrato(membro, transacoes)] });
     }
@@ -562,6 +593,87 @@ async function handleCommand(interaction) {
       if (interaction.deferred || interaction.replied) await interaction.editReply(payload);
       else await interaction.reply(payload);
     } catch (_) {}
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────
+
+/**
+ * Verifica se a URL é do CDN do Discord (arquivo enviado diretamente pelo Discord).
+ */
+function _isDiscordCDN(url) {
+  if (!url) return false;
+  return url.startsWith('https://cdn.discordapp.com/') ||
+         url.startsWith('https://media.discordapp.net/');
+}
+
+/**
+ * Baixa o arquivo da URL CDN do Discord e envia como attachment na DM do usuário.
+ * Se o download falhar, cai de volta para enviar o link no embed.
+ * @param {import('discord.js').User} destinatario
+ * @param {string} nomeProduto
+ * @param {string} urlArquivo  URL CDN do Discord
+ * @param {string|null} nomeArquivo  Nome original do arquivo (ex: produto.zip)
+ */
+async function _enviarArquivoDM(destinatario, nomeProduto, urlArquivo, nomeArquivo) {
+  const https = require('https');
+  const http  = require('http');
+  const { EmbedBuilder } = require('discord.js');
+
+  const embedEntrega = new EmbedBuilder()
+    .setColor(0x2ECC71)
+    .setTitle('📦 Entrega — Alpha Xit')
+    .setDescription(`Seu produto **${nomeProduto}** foi entregue! Aproveite! 🎉\n\nO arquivo está em anexo abaixo. ⬇️`)
+    .setTimestamp()
+    .setFooter({ text: '⚡ Alpha Xit' });
+
+  try {
+    // Baixa o arquivo em memória como Buffer
+    const buffer = await _downloadBuffer(urlArquivo);
+    const fileName = nomeArquivo || _nomeDoUrl(urlArquivo);
+    const attachment = new AttachmentBuilder(buffer, { name: fileName });
+    await destinatario.send({ embeds: [embedEntrega], files: [attachment] });
+  } catch (err) {
+    console.error('[ENTREGA] Falha ao baixar/enviar arquivo, enviando link:', err.message);
+    // Fallback: envia o link direto
+    embedEntrega.setDescription(
+      `Seu produto **${nomeProduto}** foi entregue! Aproveite! 🎉`
+    ).addFields({ name: '🔗 Download', value: urlArquivo, inline: false });
+    await destinatario.send({ embeds: [embedEntrega] });
+  }
+}
+
+/**
+ * Baixa uma URL e retorna um Buffer com o conteúdo.
+ */
+function _downloadBuffer(url) {
+  return new Promise((resolve, reject) => {
+    const lib = url.startsWith('https') ? require('https') : require('http');
+    lib.get(url, (res) => {
+      // Segue redirecionamentos
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return _downloadBuffer(res.headers.location).then(resolve).catch(reject);
+      }
+      if (res.statusCode !== 200) {
+        return reject(new Error(`HTTP ${res.statusCode}`));
+      }
+      const chunks = [];
+      res.on('data', chunk => chunks.push(chunk));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+      res.on('error', reject);
+    }).on('error', reject);
+  });
+}
+
+/**
+ * Extrai o nome do arquivo de uma URL.
+ */
+function _nomeDoUrl(url) {
+  try {
+    const partes = new URL(url).pathname.split('/');
+    return partes[partes.length - 1] || 'arquivo';
+  } catch {
+    return 'arquivo';
   }
 }
 
