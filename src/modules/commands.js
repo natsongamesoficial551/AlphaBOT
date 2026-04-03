@@ -11,20 +11,24 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('auth-setup')
-    .setDescription('Envia o embed de solicitação de Auth Key no canal configurado')
+    .setDescription('Envia o embed de solicitação de Auth ID no canal configurado')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles),
 
   new SlashCommandBuilder()
     .setName('auth-usuarios')
-    .setDescription('Lista todos os usuários com Auth Key aprovada')
+    .setDescription('Lista todos os usuários com Auth ID aprovado')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles),
 
   new SlashCommandBuilder()
     .setName('timeauth')
-    .setDescription('Define a data de expiração total da Auth Key de um usuário')
+    .setDescription('Define a expiração do Auth ID de um usuário (ANO/MÊS/SEMANA/DIA/HORA)')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
     .addUserOption(o => o.setName('usuario').setDescription('Usuário do Discord').setRequired(true))
-    .addStringOption(o => o.setName('data').setDescription('Data de expiração (DD/MM/AAAA) ou "permanente"').setRequired(true)),
+    .addIntegerOption(o => o.setName('ano').setDescription('Anos (0 = ignorar)').setRequired(true).setMinValue(0))
+    .addIntegerOption(o => o.setName('mes').setDescription('Meses (0 = ignorar)').setRequired(true).setMinValue(0))
+    .addIntegerOption(o => o.setName('semana').setDescription('Semanas (0 = ignorar)').setRequired(true).setMinValue(0))
+    .addIntegerOption(o => o.setName('dia').setDescription('Dias (0 = ignorar)').setRequired(true).setMinValue(0))
+    .addIntegerOption(o => o.setName('hora').setDescription('Horas (0 = ignorar)').setRequired(true).setMinValue(0)),
 
   new SlashCommandBuilder()
     .setName('produto-add')
@@ -364,7 +368,6 @@ async function handleCommand(interaction) {
       db.adicionarSaldo(alvo.id, quantidade, motivo);
       const novoSaldo = db.getSaldo(alvo.id);
 
-      // Notifica o usuário na DM
       try {
         const membro = await guild.members.fetch(alvo.id);
         await alvo.send({ embeds: [embedCoinRecebido(membro, quantidade, novoSaldo)] });
@@ -460,24 +463,24 @@ async function handleCommand(interaction) {
     if (commandName === 'auth-usuarios') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const { listarAuthUsers, totalAuthUsers } = require('../database');
-      const total    = totalAuthUsers();
-      const usuarios = listarAuthUsers(20);
+      const total    = await totalAuthUsers();
+      const usuarios = await listarAuthUsers(20);
 
       if (!usuarios.length) {
         return interaction.editReply({ embeds: [embedErro('Nenhum usuário aprovado ainda.')] });
       }
 
       const linhas = usuarios.map(u => {
-        const uso = Math.floor((u.uso_segundos || 0) / 3600);
-        const lim = Math.floor((u.limite_segundos || 86400) / 3600);
-        const cooldown = u.cooldown_inicio ? '🔄 Cooldown' : `⏱️ ${uso}h/${lim}h`;
-        const expiry = u.expiry_adm ? `📅 ${new Date(u.expiry_adm).toLocaleDateString('pt-BR')}` : '∞';
-        return `\`${u.username}\` — ${u.discord_tag} — ${cooldown} — ${expiry}`;
+        const expiry = u.expiry_adm
+          ? `📅 ${new Date(u.expiry_adm).toLocaleDateString('pt-BR')}`
+          : '♾️ Permanente';
+        const hwid = u.hwid ? '🖥️ Vinculado' : '🔓 Livre';
+        return `\`${u.username}\` — ${u.discord_tag} — ${expiry} — ${hwid}`;
       }).join('\n');
 
       const embed = new EmbedBuilder()
         .setColor(0x5865F2)
-        .setTitle(`🔑 Auth Keys Aprovadas — ${total} usuário(s)`)
+        .setTitle(`🔑 Auth IDs Aprovados — ${total} usuário(s)`)
         .setDescription(linhas.slice(0, 4000))
         .setFooter({ text: 'Mostrando últimos 20 • Alpha Xit Auth' })
         .setTimestamp();
@@ -489,37 +492,43 @@ async function handleCommand(interaction) {
     if (commandName === 'timeauth') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-      const alvo      = interaction.options.getUser('usuario');
-      const dataStr   = interaction.options.getString('data').trim();
+      const alvo    = interaction.options.getUser('usuario');
+      const anos    = interaction.options.getInteger('ano')    || 0;
+      const meses   = interaction.options.getInteger('mes')    || 0;
+      const semanas = interaction.options.getInteger('semana') || 0;
+      const dias    = interaction.options.getInteger('dia')    || 0;
+      const horas   = interaction.options.getInteger('hora')   || 0;
+
       const { setExpiryAdm, getAuthUserByDiscord } = require('../database');
 
-      const conta = getAuthUserByDiscord(alvo.id);
+      const conta = await getAuthUserByDiscord(alvo.id);
       if (!conta) {
-        return interaction.editReply({ embeds: [embedErro(`<@${alvo.id}> não possui uma Auth Key aprovada.`)] });
+        return interaction.editReply({ embeds: [embedErro(`<@${alvo.id}> não possui um Auth ID aprovado.`)] });
       }
 
       let dataExpiry = null;
-      let dataLabel  = '';
+      let dataLabel  = '♾️ Permanente (sem expiração)';
 
-      if (dataStr.toLowerCase() === 'permanente' || dataStr.toLowerCase() === 'sem') {
-        dataExpiry = null;
-        dataLabel  = '♾️ Permanente (sem expiração)';
-      } else {
-        // Aceita DD/MM/AAAA
-        const partes = dataStr.split('/');
-        if (partes.length !== 3) {
-          return interaction.editReply({ embeds: [embedErro('Formato inválido! Use `DD/MM/AAAA` ou `permanente`.')] });
-        }
-        const [dia, mes, ano] = partes;
-        const d = new Date(`${ano}-${mes.padStart(2,'0')}-${dia.padStart(2,'0')}T23:59:59`);
-        if (isNaN(d.getTime())) {
-          return interaction.editReply({ embeds: [embedErro('Data inválida! Use `DD/MM/AAAA`.')] });
-        }
-        dataExpiry = d.toISOString();
-        dataLabel  = `📅 ${dataStr}`;
+      const total = anos + meses + semanas + dias + horas;
+      if (total > 0) {
+        const agora = new Date();
+        agora.setFullYear(agora.getFullYear() + anos);
+        agora.setMonth(agora.getMonth() + meses);
+        agora.setDate(agora.getDate() + semanas * 7 + dias);
+        agora.setHours(agora.getHours() + horas);
+        dataExpiry = agora.toISOString();
+
+        const partes = [];
+        if (anos)    partes.push(`${anos} ano${anos > 1 ? 's' : ''}`);
+        if (meses)   partes.push(`${meses} ${meses > 1 ? 'meses' : 'mês'}`);
+        if (semanas) partes.push(`${semanas} semana${semanas > 1 ? 's' : ''}`);
+        if (dias)    partes.push(`${dias} dia${dias > 1 ? 's' : ''}`);
+        if (horas)   partes.push(`${horas} hora${horas > 1 ? 's' : ''}`);
+        const dataFormatada = agora.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        dataLabel = `📅 ${partes.join(', ')} — expira em ${dataFormatada}`;
       }
 
-      setExpiryAdm(alvo.id, dataExpiry);
+      await setExpiryAdm(alvo.id, dataExpiry);
 
       // Notifica o usuário via DM
       try {
@@ -528,9 +537,8 @@ async function handleCommand(interaction) {
             .setColor(0x5865F2)
             .setTitle('📅 Sua licença foi atualizada!')
             .setDescription(
-              `O **staff** atualizou a expiração da sua **Auth Key**.\n\n` +
-              `> ⏳ **Nova expiração:** ${dataLabel}\n\n` +
-              `Suas 24h de uso ativo continuam funcionando normalmente.`
+              `O **staff** atualizou a expiração do seu **Auth ID**.\n\n` +
+              `> ⏳ **Nova expiração:** ${dataLabel}`
             )
             .setFooter({ text: 'Alpha Xit Auth' })
             .setTimestamp()
@@ -540,7 +548,7 @@ async function handleCommand(interaction) {
 
       await interaction.editReply({
         embeds: [embedSucesso(
-          `Auth Key de <@${alvo.id}> (\`${conta.username}\`) atualizada!\nNova expiração: **${dataLabel}**`
+          `Auth ID de <@${alvo.id}> (\`${conta.username}\`) atualizado!\nNova expiração: **${dataLabel}**`
         )],
       });
       _log(guild, 'admin', `/timeauth aplicado em <@${alvo.id}> — ${dataLabel} por <@${user.id}>`, user.id);

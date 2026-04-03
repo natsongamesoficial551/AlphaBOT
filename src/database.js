@@ -105,8 +105,7 @@ async function _createTables() {
       id INTEGER PRIMARY KEY AUTOINCREMENT, discord_id TEXT UNIQUE NOT NULL,
       discord_tag TEXT, nome_completo TEXT, username TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL, auth_key TEXT UNIQUE NOT NULL, hwid TEXT,
-      uso_segundos INTEGER DEFAULT 0, limite_segundos INTEGER DEFAULT 86400,
-      ultimo_heartbeat TEXT, cooldown_inicio TEXT, expiry_adm TEXT,
+      ultimo_heartbeat TEXT, expiry_adm TEXT,
       ativo INTEGER DEFAULT 1, criado_em TEXT DEFAULT (datetime('now','localtime')))`,
     `CREATE TABLE IF NOT EXISTS auth_sessions (
       id INTEGER PRIMARY KEY AUTOINCREMENT, sessionid TEXT UNIQUE NOT NULL,
@@ -252,8 +251,10 @@ async function aprovarSolicitacao(reqId, authKey) {
   if (!req) return false;
   const jaAprovado = await getAsync(`SELECT id FROM auth_users WHERE discord_id=?`, [req.discord_id]);
   if (jaAprovado) return false;
-  await _exec(`INSERT INTO auth_users (discord_id, discord_tag, nome_completo, username, password_hash, auth_key) VALUES (?,?,?,?,?,?)`,
-    [req.discord_id, req.discord_tag, req.nome_completo, req.username, req.password_hash, authKey]);
+  await _exec(
+    `INSERT INTO auth_users (discord_id, discord_tag, nome_completo, username, password_hash, auth_key) VALUES (?,?,?,?,?,?)`,
+    [req.discord_id, req.discord_tag, req.nome_completo, req.username, req.password_hash, authKey]
+  );
   await atualizarStatusSolicitacao(reqId, 'aprovado');
   return true;
 }
@@ -261,38 +262,42 @@ async function getAuthUserByKey(authKey) { return getAsync(`SELECT * FROM auth_u
 async function getAuthUserByDiscord(discordId) { return getAsync(`SELECT * FROM auth_users WHERE discord_id=?`, [discordId]); }
 async function getAuthUserByUsername(username) { return getAsync(`SELECT * FROM auth_users WHERE username=?`, [username]); }
 
+/**
+ * processarHeartbeat — Auth ID permanente por padrão.
+ * Apenas verifica se o Auth ID está ativo e se não expirou (expiry_adm).
+ * Não há mais limite de 24h nem cooldown.
+ */
 async function processarHeartbeat(authKey) {
   const user = await getAuthUserByKey(authKey);
-  if (!user || !user.ativo) return { ok: false, message: 'Auth Key inválida.' };
+  if (!user || !user.ativo) return { ok: false, message: 'Auth ID inválido.' };
+
   const agora = new Date();
-  if (user.expiry_adm && new Date(user.expiry_adm) < agora) return { ok: false, message: 'Sua licença expirou. Fale com o staff.' };
-  if (user.cooldown_inicio) {
-    const fim = new Date(user.cooldown_inicio);
-    fim.setDate(fim.getDate() + 30);
-    if (agora < fim) {
-      const d = Math.ceil((fim - agora) / (1000 * 60 * 60 * 24));
-      return { ok: false, message: `Em cooldown. Disponível em ${d} dia(s).` };
-    }
-    await _exec(`UPDATE auth_users SET uso_segundos=0, cooldown_inicio=NULL, ultimo_heartbeat=NULL WHERE auth_key=?`, [authKey]);
+
+  // Verifica expiração administrativa (se definida)
+  if (user.expiry_adm && new Date(user.expiry_adm) < agora) {
+    return { ok: false, message: 'Sua licença expirou. Fale com o staff.' };
   }
-  let seg = 0;
-  if (user.ultimo_heartbeat) seg = Math.min(Math.floor((agora - new Date(user.ultimo_heartbeat)) / 1000), 70);
-  const novoUso = (user.uso_segundos || 0) + seg;
-  const limite  = user.limite_segundos || 86400;
-  if (novoUso >= limite) {
-    await _exec(`UPDATE auth_users SET uso_segundos=?, cooldown_inicio=?, ultimo_heartbeat=? WHERE auth_key=?`, [limite, agora.toISOString(), agora.toISOString(), authKey]);
-    return { ok: false, message: 'Suas 24h foram utilizadas. Cooldown de 30 dias iniciado.' };
+
+  // Atualiza último heartbeat
+  await _exec(`UPDATE auth_users SET ultimo_heartbeat=? WHERE auth_key=?`, [agora.toISOString(), authKey]);
+
+  // Calcula tempo restante (se houver expiração)
+  let tempoRestante = '♾️ Permanente';
+  if (user.expiry_adm) {
+    const restMs = new Date(user.expiry_adm) - agora;
+    const restH  = Math.floor(restMs / (1000 * 60 * 60));
+    const restM  = Math.floor((restMs % (1000 * 60 * 60)) / (1000 * 60));
+    tempoRestante = `${restH}h ${restM}m`;
   }
-  await _exec(`UPDATE auth_users SET uso_segundos=?, ultimo_heartbeat=? WHERE auth_key=?`, [novoUso, agora.toISOString(), authKey]);
-  const rest = limite - novoUso;
-  return { ok: true, uso_segundos: novoUso, segundos_restantes: rest, tempo_restante: `${Math.floor(rest/3600)}h ${Math.floor((rest%3600)/60)}m` };
+
+  return { ok: true, tempo_restante: tempoRestante };
 }
 
 async function vincularHwid(authKey, hwid) { await _exec(`UPDATE auth_users SET hwid=? WHERE auth_key=? AND hwid IS NULL`, [hwid, authKey]); }
 async function getHwidByKey(authKey) { return (await getAsync(`SELECT hwid FROM auth_users WHERE auth_key=?`, [authKey]))?.hwid || null; }
 async function setExpiryAdm(discordId, dataExpiry) { await _exec(`UPDATE auth_users SET expiry_adm=? WHERE discord_id=?`, [dataExpiry, discordId]); }
 async function listarAuthUsers(limite = 100) {
-  return queryAsync(`SELECT username, discord_tag, nome_completo, auth_key, uso_segundos, limite_segundos, cooldown_inicio, expiry_adm, hwid, criado_em FROM auth_users ORDER BY id DESC LIMIT ?`, [limite]);
+  return queryAsync(`SELECT username, discord_tag, nome_completo, auth_key, expiry_adm, hwid, criado_em FROM auth_users ORDER BY id DESC LIMIT ?`, [limite]);
 }
 async function totalAuthUsers() { return (await getAsync(`SELECT COUNT(*) as total FROM auth_users`))?.total || 0; }
 

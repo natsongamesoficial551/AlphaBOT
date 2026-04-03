@@ -1,6 +1,6 @@
 /**
  * authApi.js — API REST do sistema Auth Key
- * Usa a instância compartilhada de database.js (Turso)
+ * Auth ID permanente por padrão; expiração apenas se admin definir via /timeauth ou modal de aprovação.
  */
 
 const crypto = require('crypto');
@@ -50,7 +50,7 @@ async function handleAuthRequest(req, res) {
   if (url === '/auth/init' && method === 'POST') {
     return jsonResponse(res, 200, {
       success: true, sessionid: generateSession(), newSession: true,
-      message: 'Conectado ao servidor. Insira suas credenciais e Auth Key.',
+      message: 'Conectado ao servidor. Insira suas credenciais e Auth ID.',
     });
   }
 
@@ -58,55 +58,54 @@ async function handleAuthRequest(req, res) {
   if (url === '/auth/activate' && method === 'POST') {
     const { username, password, auth_key, hwid } = body;
     if (!username || !password || !auth_key)
-      return jsonResponse(res, 400, { success: false, message: 'Preencha usuário, senha e Auth Key!' });
+      return jsonResponse(res, 400, { success: false, message: 'Preencha usuário, senha e Auth ID!' });
 
     const user = await db.getAuthUserByKey(auth_key.trim().toUpperCase());
-    if (!user) return jsonResponse(res, 401, { success: false, message: 'Auth Key inválida ou não encontrada.' });
+    if (!user) return jsonResponse(res, 401, { success: false, message: 'Auth ID inválido ou não encontrado.' });
 
     const hash = hashPassword(password);
     if (user.username.toLowerCase() !== username.trim().toLowerCase() || user.password_hash !== hash)
-      return jsonResponse(res, 401, { success: false, message: 'Usuário ou senha incorretos para esta Auth Key.' });
+      return jsonResponse(res, 401, { success: false, message: 'Usuário ou senha incorretos para este Auth ID.' });
 
-    if (!user.ativo) return jsonResponse(res, 403, { success: false, message: 'Esta Auth Key está desativada. Fale com o staff.' });
+    if (!user.ativo)
+      return jsonResponse(res, 403, { success: false, message: 'Este Auth ID está desativado. Fale com o staff.' });
 
+    // Verifica expiração administrativa (se definida)
     if (user.expiry_adm && new Date(user.expiry_adm) < new Date())
       return jsonResponse(res, 403, { success: false, message: 'Sua licença expirou. Fale com o staff.' });
 
-    if (user.cooldown_inicio) {
-      const fim = new Date(user.cooldown_inicio);
-      fim.setDate(fim.getDate() + 30);
-      if (new Date() < fim) {
-        const dias = Math.ceil((fim - new Date()) / (1000 * 60 * 60 * 24));
-        return jsonResponse(res, 403, { success: false, message: `Suas 24h foram utilizadas. Cooldown ativo — disponível em ${dias} dia(s).` });
-      }
-      await db.getDB().then(c => c.execute({ sql: `UPDATE auth_users SET uso_segundos=0, cooldown_inicio=NULL, ultimo_heartbeat=NULL WHERE auth_key=?`, args: [auth_key.trim().toUpperCase()] }));
-    }
-
+    // Vincula ou verifica HWID
     if (hwid) {
       if (!user.hwid) {
         await db.vincularHwid(auth_key.trim().toUpperCase(), hwid);
       } else if (user.hwid !== hwid) {
         _dmHwidAlerta(user, hwid);
-        return jsonResponse(res, 403, { success: false, message: 'Esta Auth Key já está vinculada a outro computador. Fale com o staff.' });
+        return jsonResponse(res, 403, { success: false, message: 'Este Auth ID já está vinculado a outro computador. Fale com o staff.' });
       }
     }
 
-    const limSeg  = user.limite_segundos || 86400;
-    const usoSeg  = user.uso_segundos    || 0;
-    const restSeg = Math.max(0, limSeg - usoSeg);
+    // Calcula tempo restante (se houver expiração)
+    let tempoRestante = '♾️ Permanente';
+    let expiryLabel   = 'permanente';
+    if (user.expiry_adm) {
+      const restMs = new Date(user.expiry_adm) - new Date();
+      const restH  = Math.floor(restMs / (1000 * 60 * 60));
+      const restM  = Math.floor((restMs % (1000 * 60 * 60)) / (1000 * 60));
+      tempoRestante = `${restH}h ${restM}m`;
+      expiryLabel   = user.expiry_adm;
+    }
 
     await db.getDB().then(c => c.execute({ sql: `UPDATE auth_users SET ultimo_heartbeat=datetime('now') WHERE auth_key=?`, args: [auth_key.trim().toUpperCase()] }));
     await db.getDB().then(c => c.execute({ sql: `INSERT INTO auth_logs (username, acao) VALUES (?,?)`, args: [user.username, 'activate'] }));
 
     return jsonResponse(res, 200, {
-      success: true, sessionid: generateSession(), message: 'Auth Key ativada com sucesso!',
+      success: true, sessionid: generateSession(), message: 'Auth ID ativado com sucesso!',
       info: {
         username: user.username, nome_completo: user.nome_completo,
         auth_key: user.auth_key, hwid: user.hwid || hwid || '',
         createdate: user.criado_em,
-        tempo_restante: `${Math.floor(restSeg/3600)}h ${Math.floor((restSeg%3600)/60)}m`,
-        uso_segundos: usoSeg,
-        subscriptions: [{ subscription: 'alpha_xit', expiry: user.expiry_adm || 'uso_ativo', timeleft: `${Math.floor(restSeg/3600)}h ${Math.floor((restSeg%3600)/60)}m` }],
+        tempo_restante: tempoRestante,
+        subscriptions: [{ subscription: 'alpha_xit', expiry: expiryLabel, timeleft: tempoRestante }],
       },
     });
   }
@@ -114,13 +113,9 @@ async function handleAuthRequest(req, res) {
   // ── POST /auth/heartbeat ────────────────────────────────────────────────
   if (url === '/auth/heartbeat' && method === 'POST') {
     const { auth_key } = body;
-    if (!auth_key) return jsonResponse(res, 400, { success: false, message: 'Auth Key obrigatória.' });
+    if (!auth_key) return jsonResponse(res, 400, { success: false, message: 'Auth ID obrigatório.' });
     const result = await db.processarHeartbeat(auth_key.trim().toUpperCase());
-    if (!result.ok && result.esgotado && body.discord_id) {
-      const user = await db.getAuthUserByKey(auth_key.trim().toUpperCase());
-      if (user) _dmUsoEsgotado(user);
-    }
-    return jsonResponse(res, result.ok ? 200 : 200, result);
+    return jsonResponse(res, 200, result);
   }
 
   // ── POST /auth/log ──────────────────────────────────────────────────────
@@ -146,21 +141,8 @@ async function _dmHwidAlerta(user, hwidTentativa) {
     const { EmbedBuilder } = require('discord.js');
     const u = await client.users.fetch(user.discord_id);
     await u.send({ embeds: [new EmbedBuilder().setColor(0xE74C3C).setTitle('🚨 Tentativa de uso em outro PC!')
-      .setDescription(`Alguém tentou usar sua Auth Key em outro computador!\n\n> 🔑 **Sua key:** \`${user.auth_key}\`\n> 🕐 **Horário:** ${new Date().toLocaleString('pt-BR')}\n\nSe não foi você, o acesso foi bloqueado.\nSe quer trocar de PC, fale com o **staff**.`)
+      .setDescription(`Alguém tentou usar seu Auth ID em outro computador!\n\n> 🔑 **Seu Auth ID:** \`${user.auth_key}\`\n> 🕐 **Horário:** ${new Date().toLocaleString('pt-BR')}\n\nSe não foi você, o acesso foi bloqueado.\nSe quer trocar de PC, fale com o **staff**.`)
       .setFooter({ text: 'Alpha Xit Auth • Segurança' }).setTimestamp()] });
-  } catch (_) {}
-}
-
-async function _dmUsoEsgotado(user) {
-  try {
-    const client = global._discordClient;
-    if (!client) return;
-    const { EmbedBuilder } = require('discord.js');
-    const u = await client.users.fetch(user.discord_id);
-    const d = new Date(); d.setDate(d.getDate() + 30);
-    await u.send({ embeds: [new EmbedBuilder().setColor(0xF39C12).setTitle('⏱️ Suas 24h foram utilizadas!')
-      .setDescription(`Olá, **${user.nome_completo}**!\n\nVocê utilizou todas as suas **24 horas** de acesso ativo.\n\n> 🔄 **Cooldown:** 30 dias\n> 📅 **Disponível em:** ${d.toLocaleDateString('pt-BR')}\n\nApós o cooldown, suas 24h serão renovadas automaticamente.`)
-      .setFooter({ text: 'Alpha Xit Auth' }).setTimestamp()] });
   } catch (_) {}
 }
 

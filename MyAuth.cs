@@ -1,12 +1,12 @@
 /*
- * MyAuth.cs — Sistema Auth Key Alpha Xit
+ * MyAuth.cs — Sistema Auth ID Alpha Xit
  *
  * FLUXO:
- *   1. Pessoa cria conta no Discord (bot)
- *   2. Staff aprova → Auth Key enviada na DM (formato XXXXXX-XXXXXX-XXXXXX)
- *   3. Pessoa abre o software, digita Usuário + Senha + Auth Key
- *   4. 24h de uso ativo (conta só quando o painel está aberto)
- *   5. Após esgotar as 24h → cooldown de 30 dias, depois renova
+ *   1. Pessoa solicita Auth ID no Discord (bot)
+ *   2. Staff aprova → Auth ID enviado na DM (formato XXXXXX-XXXXXX-XXXXXX)
+ *   3. Pessoa abre o software, digita Usuário + Senha + Auth ID
+ *   4. Auth ID é permanente por padrão (sem limite de tempo)
+ *   5. Expiração apenas se o staff definir via /timeauth ou ao aprovar
  *
  * DEPENDÊNCIA: Adicione referência System.Management no projeto
  *   Projeto → Adicionar Referência → System.Management
@@ -34,7 +34,7 @@
  *       if (!MyAuthApp.response.success)
  *           statusLogin.Text = "Erro de conexão: " + MyAuthApp.response.message;
  *       else
- *           statusLogin.Text = "Conectado. Insira suas credenciais e Auth Key.";
+ *           statusLogin.Text = "Conectado. Insira suas credenciais e Auth ID.";
  *   }
  *
  * ─── Form1_Load ───────────────────────────────────────────────────────────────
@@ -57,7 +57,7 @@
  *           string.IsNullOrWhiteSpace(Pass.Text) ||
  *           string.IsNullOrWhiteSpace(AuthKey.Text))
  *       {
- *           statusLogin.Text = "Preencha usuário, senha e Auth Key!";
+ *           statusLogin.Text = "Preencha usuário, senha e Auth ID!";
  *           return;
  *       }
  *       statusLogin.Text = "Autenticando...";
@@ -65,13 +65,13 @@
  *       MyAuthApp.activate(Username.Text.Trim(), Pass.Text.Trim(), AuthKey.Text.Trim());
  *       if (MyAuthApp.response.success)
  *       {
- *           statusLogin.Text = "Auth Key ativada!";
+ *           statusLogin.Text = "Auth ID ativado!";
  *           l1.Visible = false;
  *           l1.SendToBack();
  *           p1.BringToFront();
  *           status.Text = "Bem-vindo " + MyAuthApp.user_data.username +
- *                         "! Tempo restante: " + MyAuthApp.user_data.tempo_restante;
- *           MyAuthApp.StartHeartbeat();  // ← inicia contagem de uso ativo
+ *                         "! Licença: " + MyAuthApp.user_data.tempo_restante;
+ *           MyAuthApp.StartHeartbeat();  // ← mantém sessão ativa
  *           MyAuthApp.log("Usuário " + MyAuthApp.user_data.username + " ativou o painel");
  *       }
  *       else
@@ -217,7 +217,7 @@ namespace MyAuth
         }
 
         // ── StartHeartbeat() — chame após login bem-sucedido ─────────────────
-        // Envia heartbeat a cada 60s para contar o tempo de uso ativo
+        // Envia heartbeat a cada 60s para manter a sessão ativa e verificar expiração
         public void StartHeartbeat()
         {
             if (_authKey == null || _heartbeatTimer != null) return;
@@ -233,17 +233,14 @@ namespace MyAuth
 
                     if (!ok)
                     {
-                        string msg = obj["message"]?.Value<string>() ?? "";
-                        bool esgotado = obj["esgotado"]?.Value<bool>() ?? false;
+                        string msg = obj["message"]?.Value<string>() ?? "Sessão encerrada.";
 
                         StopHeartbeat();
 
                         // Fecha o software na thread da UI
                         Application.Invoke(() => {
                             MessageBox.Show(
-                                esgotado
-                                    ? "Suas 24 horas foram utilizadas!\n\nCooldown de 30 dias iniciado.\nO software será encerrado."
-                                    : msg,
+                                msg,
                                 "Alpha Xit — Sessão encerrada",
                                 MessageBoxButtons.OK,
                                 MessageBoxIcon.Warning
