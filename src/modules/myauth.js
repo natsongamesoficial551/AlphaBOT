@@ -100,8 +100,8 @@ function modalSolicitarKey() {
 // ── Handler: botão "Solicitar Auth Key" ───────────────────────────────────
 async function handleBtnAuthSolicitar(interaction) {
   // Verifica se já tem solicitação ou conta
-  const solicitacao = db.getSolicitacao(interaction.user.id);
-  const conta       = db.getAuthUserByDiscord(interaction.user.id);
+  const solicitacao = await db.getSolicitacao(interaction.user.id);
+  const conta       = await db.getAuthUserByDiscord(interaction.user.id);
 
   if (conta) {
     return interaction.reply({
@@ -146,7 +146,7 @@ async function handleModalAuthSolicitar(interaction) {
   }
 
   // Bloqueia username duplicado
-  const usernameEmUso = db.getAuthUserByUsername(username);
+  const usernameEmUso = await db.getAuthUserByUsername(username);
   if (usernameEmUso) {
     return interaction.editReply({
       embeds: [new EmbedBuilder().setColor(0xE74C3C).setDescription(
@@ -155,7 +155,7 @@ async function handleModalAuthSolicitar(interaction) {
     });
   }
 
-  const resultado = db.criarSolicitacao(
+  const resultado = await db.criarSolicitacao(
     interaction.user.id,
     interaction.user.tag,
     nomeCompleto,
@@ -177,7 +177,7 @@ async function handleModalAuthSolicitar(interaction) {
   }
 
   // Busca a solicitação recém-criada para pegar o ID
-  const req = db.getSolicitacao(interaction.user.id);
+  const req = await db.getSolicitacao(interaction.user.id);
 
   // Manda pro canal staff
   const guild     = interaction.guild;
@@ -216,7 +216,7 @@ async function handleModalAuthSolicitar(interaction) {
       components: [rowAdmin],
     });
 
-    db.salvarStaffMsgId(req.id, msgStaff.id);
+    await db.salvarStaffMsgId(req.id, msgStaff.id);
   }
 
   await interaction.editReply({
@@ -240,7 +240,7 @@ async function handleModalAuthSolicitar(interaction) {
 async function handleBtnAuthAprovar(interaction, reqId) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  const req = db.getSolicitacaoPorId(parseInt(reqId));
+  const req = await db.getSolicitacaoPorId(parseInt(reqId));
   if (!req) {
     return interaction.editReply({ embeds: [new EmbedBuilder().setColor(0xE74C3C).setDescription('❌ Solicitação não encontrada.')] });
   }
@@ -249,7 +249,7 @@ async function handleBtnAuthAprovar(interaction, reqId) {
   }
 
   const authKey = gerarAuthKey();
-  const ok = db.aprovarSolicitacao(req.id, authKey);
+  const ok = await db.aprovarSolicitacao(req.id, authKey);
 
   if (!ok) {
     return interaction.editReply({ embeds: [new EmbedBuilder().setColor(0xE74C3C).setDescription('❌ Erro ao aprovar. Discord já pode ter uma conta vinculada.')] });
@@ -295,12 +295,12 @@ async function handleBtnAuthAprovar(interaction, reqId) {
 async function handleBtnAuthReprovar(interaction, reqId) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  const req = db.getSolicitacaoPorId(parseInt(reqId));
+  const req = await db.getSolicitacaoPorId(parseInt(reqId));
   if (!req) {
     return interaction.editReply({ embeds: [new EmbedBuilder().setColor(0xE74C3C).setDescription('❌ Solicitação não encontrada.')] });
   }
 
-  db.atualizarStatusSolicitacao(req.id, 'reprovado');
+  await db.atualizarStatusSolicitacao(req.id, 'reprovado');
 
   try {
     const user = await interaction.client.users.fetch(req.discord_id);
