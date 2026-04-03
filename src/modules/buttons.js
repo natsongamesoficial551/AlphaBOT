@@ -5,6 +5,7 @@ const { embedRegistroSucesso, embedJaRegistrado, embedBoasVindasDM,
         embedListaProdutos, embedProduto, embedErro, embedLog,
         embedPIXCoin, embedCoinRecebido, embedSaldoInsuficiente, embedSaldo } = require('../embeds');
 const { handleAuthButton, handleAuthModal } = require('./myauth');
+const { abrirFormularioCompra, processarFormularioCompra, processarAprovacao, processarReprovacao } = require('./pixCompra');
 
 async function handleButton(interaction) {
   const { customId, guild, member, user } = interaction;
@@ -15,31 +16,24 @@ async function handleButton(interaction) {
   }
 
   try {
-
-  // ── COMPRAR PACOTE COIN ────────────────────────────────
+  // ── COMPRAR PACOTE COIN (novo fluxo: formulário + QR Code Pix + aprovação por DM) ───
   if (customId.startsWith('btn_coin_')) {
     const pacote = parseInt(customId.replace('btn_coin_', ''));
-    const precos = { 100: '13,00', 250: '30,00', 500: '58,00', 1000: '112,00' };
-    if (!precos[pacote]) return interaction.reply({ embeds: [embedErro('Pacote inválido.')], flags: MessageFlags.Ephemeral });
-
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-    const pedidoId = await db.criarPedido(0, `COIN-${pacote}`, user.id, user.username);
-
-    const embedPix = embedPIXCoin(pacote, pedidoId);
-    if (!embedPix) return interaction.editReply({ embeds: [embedErro('Erro ao gerar embed de pagamento.')] });
-
-    try {
-      await user.send({ embeds: [embedPix] });
-      await interaction.editReply({ embeds: [{ color: 0x27AE60, description: `✅ Instruções de pagamento enviadas na sua **DM**!\nPedido: \`#coin-${pedidoId}\`` }] });
-    } catch {
-      await interaction.editReply({ embeds: [embedErro('Não consegui enviar DM. Habilite mensagens diretas.')] });
-    }
-    _log(guild, 'compra', `<@${user.id}> solicitou ${pacote} 🪙 XIT Coins (Pedido #coin-${pedidoId})`, user.id);
-    return;
+    // Abre o modal de formulário antifraude (não precisa de deferReply)
+    return abrirFormularioCompra(interaction, pacote);
   }
 
-  // ── COMPRAR PRODUTO COM COINS ──────────────────────────
+  // ── APROVAR PEDIDO PIX (apenas dono via DM) ──────────────────────────────
+  if (customId.startsWith('btn_pix_aprovar_')) {
+    return processarAprovacao(interaction);
+  }
+
+  // ── REPROVAR PEDIDO PIX (apenas dono via DM) ────────────────────────────
+  if (customId.startsWith('btn_pix_reprovar_')) {
+    return processarReprovacao(interaction);
+  }
+
+  // ── COMPRAR PRODUTO COM COINS ──────────────────────────────────────────────
   if (customId.startsWith('btn_comprar_coin_')) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -243,6 +237,11 @@ async function handleModal(interaction) {
   // ── AUTH PRÓPRIO MODALS ────────────────────────────────
   if (interaction.customId.startsWith('modal_auth_')) {
     return handleAuthModal(interaction);
+  }
+
+  // ── MODAL DE COMPRA PIX (formulário antifraude) ──────────────────────
+  if (interaction.customId.startsWith('modal_pix_compra_')) {
+    return processarFormularioCompra(interaction);
   }
 
   if (interaction.customId !== 'modal_registro') return;

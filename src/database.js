@@ -114,6 +114,20 @@ async function _createTables() {
     `CREATE TABLE IF NOT EXISTS auth_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, acao TEXT,
       criado_em TEXT DEFAULT (datetime('now','localtime')))`,
+    `CREATE TABLE IF NOT EXISTS pix_pedidos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      comprador_id TEXT NOT NULL,
+      comprador_tag TEXT,
+      pacote INTEGER NOT NULL,
+      valor_reais TEXT NOT NULL,
+      nome_completo TEXT NOT NULL,
+      cpf TEXT NOT NULL,
+      telefone TEXT NOT NULL,
+      status TEXT DEFAULT 'aguardando',
+      staff_dm_msg_id TEXT,
+      guild_id TEXT,
+      criado_em TEXT DEFAULT (datetime('now','localtime')),
+      resolvido_em TEXT)`,
   ];
   for (const sql of stmts) {
     await client.execute({ sql, args: [] });
@@ -234,6 +248,20 @@ async function addLog(guildId, tipo, descricao, autorId = '') {
   await _exec(`INSERT INTO logs (guild_id,tipo,descricao,autor_id) VALUES (?,?,?,?)`, [guildId, tipo, descricao, autorId]);
 }
 
+// ── Pix Pedidos (compra segura de coins) ─────────────────────────────────────
+async function criarPixPedido(compradorId, compradorTag, pacote, valorReais, nomeCompleto, cpf, telefone, guildId) {
+  const r = await _exec(
+    `INSERT INTO pix_pedidos (comprador_id, comprador_tag, pacote, valor_reais, nome_completo, cpf, telefone, guild_id) VALUES (?,?,?,?,?,?,?,?)`,
+    [compradorId, compradorTag, pacote, valorReais, nomeCompleto, cpf, telefone, guildId || '']
+  );
+  return Number(r.lastInsertRowid);
+}
+async function getPixPedido(id) { return getAsync(`SELECT * FROM pix_pedidos WHERE id=?`, [id]); }
+async function aprovarPixPedido(id) { await _exec(`UPDATE pix_pedidos SET status='aprovado', resolvido_em=datetime('now','localtime') WHERE id=?`, [id]); }
+async function reprovarPixPedido(id) { await _exec(`UPDATE pix_pedidos SET status='reprovado', resolvido_em=datetime('now','localtime') WHERE id=?`, [id]); }
+async function salvarStaffDmMsgId(id, msgId) { await _exec(`UPDATE pix_pedidos SET staff_dm_msg_id=? WHERE id=?`, [msgId, id]); }
+async function getPixPedidosAbertos() { return queryAsync(`SELECT * FROM pix_pedidos WHERE status='aguardando' ORDER BY criado_em DESC`); }
+
 // ── Auth Key System ───────────────────────────────────────────────────────────
 async function criarSolicitacao(discordId, discordTag, nomeCompleto, username, passwordHash) {
   const existe = await getAsync(`SELECT id, status FROM auth_requests WHERE discord_id=?`, [discordId]);
@@ -309,6 +337,7 @@ module.exports = {
   criarPedido, confirmarPedido, cancelarPedido, getPedidosAbertos, getPedidosByUser, getPedido,
   getCarteira, getSaldo, adicionarSaldo, removerSaldo, getExtrato,
   getYTConfig, setYTConfig, updateUltimoVideo, addLog,
+  criarPixPedido, getPixPedido, aprovarPixPedido, reprovarPixPedido, salvarStaffDmMsgId, getPixPedidosAbertos,
   criarSolicitacao, getSolicitacao, getSolicitacaoPorId,
   atualizarStatusSolicitacao, salvarStaffMsgId,
   aprovarSolicitacao, getAuthUserByKey, getAuthUserByDiscord,

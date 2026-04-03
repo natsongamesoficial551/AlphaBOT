@@ -10,10 +10,11 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@libsql/client": "^0.14.0",
     "axios": "^1.13.6",
     "discord.js": "^14.25.1",
     "dotenv": "^17.3.1",
-    "rss-parser": "^3.13.0",
-    "@libsql/client": "^0.14.0"
+    "qrcode": "^1.5.4",
+    "rss-parser": "^3.13.0"
   }
 }
