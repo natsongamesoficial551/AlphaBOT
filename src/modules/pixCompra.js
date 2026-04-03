@@ -213,6 +213,14 @@ async function processarFormularioCompra(interaction) {
     });
   }
 
+  if (pixPayload) {
+    embedComprador.addFields({
+      name: '📋 Pix Copia e Cola',
+      value: `\`\`\`${pixPayload}\`\`\``,
+      inline: false,
+    });
+  }
+
   embedComprador.addFields({
     name: '⏳ Próximos passos',
     value:

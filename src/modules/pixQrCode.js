@@ -43,16 +43,45 @@ function campo(id, valor) {
  * @returns {string} payload Pix pronto para QR Code
  */
 function gerarPayloadPix({ pixKey, merchantName, merchantCity, amount, txid }) {
-  // Sanitiza campos conforme limite do padrão
-  const nome    = merchantName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').slice(0, 25);
-  const cidade  = merchantCity.normalize('NFD').replace(/[\u0300-\u036f]/g, '').slice(0, 15);
-  const txidSan = (txid || 'ALPHABOT').replace(/[^A-Za-z0-9]/g, '').slice(0, 25) || 'ALPHABOT';
-  const valor   = parseFloat(amount).toFixed(2);
+  // 1. Sanitiza a chave Pix
+  let chave = pixKey.trim();
+  
+  if (chave.includes('@')) {
+    // E-mail: mantém como está (trim já feito)
+  } else {
+    // Remove tudo que não é alfanumérico
+    const apenasNumeros = chave.replace(/\D/g, '');
+    const apenasAlfanumerico = chave.replace(/[^a-zA-Z0-9]/g, '');
+
+    if (apenasNumeros.length === 11) {
+      // Provavelmente CPF: usa apenas os números
+      chave = apenasNumeros;
+    } else if (apenasNumeros.length === 10 || (apenasNumeros.length === 11 && (apenasNumeros.startsWith('9') || apenasNumeros[2] === '9'))) {
+      // Telefone sem o 55: adiciona 55
+      chave = '55' + apenasNumeros;
+    } else if (apenasNumeros.length === 12 || apenasNumeros.length === 13) {
+      // Telefone já com 55 ou similar: usa apenas números
+      chave = apenasNumeros;
+    } else {
+      // Chave aleatória ou outro formato: usa alfanumérico limpo
+      chave = apenasAlfanumerico;
+    }
+  }
+
+  // 2. Sanitiza Nome e Cidade (remove acentos e limita tamanho)
+  const nome    = merchantName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9 ]/g, '').slice(0, 25);
+  const cidade  = merchantCity.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9 ]/g, '').slice(0, 15);
+  
+  // 3. TXID: O padrão para Pix estático permite '***' ou um ID alfanumérico sem espaços
+  const txidSan = (txid || '***').replace(/[^A-Za-z0-9]/g, '').slice(0, 25) || '***';
+  
+  // 4. Valor: Garante ponto como separador decimal
+  const valor   = parseFloat(amount.replace(',', '.')).toFixed(2);
 
   // Campo 26 — Merchant Account Information (GUI + chave)
   const gui    = campo('00', 'BR.GOV.BCB.PIX');
-  const chave  = campo('01', pixKey);
-  const mai    = campo('26', gui + chave);
+  const cChave = campo('01', chave);
+  const mai    = campo('26', gui + cChave);
 
   // Monta payload sem CRC
   let payload =
@@ -63,8 +92,8 @@ function gerarPayloadPix({ pixKey, merchantName, merchantCity, amount, txid }) {
     campo('53', '986') +         // Transaction Currency (BRL)
     campo('54', valor) +         // Transaction Amount
     campo('58', 'BR') +          // Country Code
-    campo('59', nome) +          // Merchant Name
-    campo('60', cidade) +        // Merchant City
+    campo('59', nome || 'ALPHABOT') + // Merchant Name
+    campo('60', cidade || 'SAO PAULO') + // Merchant City
     campo('62', campo('05', txidSan)) + // Additional Data (TXID)
     '6304';                      // CRC placeholder
 
@@ -80,9 +109,9 @@ function gerarPayloadPix({ pixKey, merchantName, merchantCity, amount, txid }) {
 async function gerarQrCodePix(opts) {
   const payload = gerarPayloadPix(opts);
   const buffer  = await qrcode.toBuffer(payload, {
-    errorCorrectionLevel: 'M',
+    errorCorrectionLevel: 'L', // Nível L é mais comum para QR Codes de pagamento (mais simples de ler)
     type: 'png',
-    width: 400,
+    width: 512,
     margin: 2,
     color: { dark: '#000000', light: '#FFFFFF' },
   });
