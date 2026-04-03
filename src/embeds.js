@@ -123,7 +123,8 @@ function embedProduto(produto) {
     .setTimestamp()
     .setFooter(FOOTER);
 
-  if (produto.link) embed.addFields({ name: '🔗 Mais informações', value: produto.link, inline: false });
+  // Link/Arquivo removido do embed público para segurança
+  // if (produto.link) embed.addFields({ name: '🔗 Mais informações', value: produto.link, inline: false });
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -274,176 +275,127 @@ function embedNovoVideo(video) {
 function embedPedidosAbertos(pedidos) {
   if (!pedidos.length) {
     return new EmbedBuilder()
-      .setColor(COR.sucesso)
+      .setColor(COR.aviso)
       .setTitle('📋 Pedidos em Aberto')
-      .setDescription('Nenhum pedido aguardando confirmação!')
+      .setDescription('Nenhum pedido aguardando confirmação.')
       .setFooter(FOOTER);
   }
   const embed = new EmbedBuilder()
     .setColor(COR.admin)
-    .setTitle(`📋 Pedidos em Aberto — ${pedidos.length} pedido(s)`)
+    .setTitle('📋 Pedidos em Aberto')
+    .setDescription(`Existem **${pedidos.length}** pedido(s) pendente(s).`)
     .setTimestamp()
     .setFooter(FOOTER);
 
-  pedidos.slice(0, 15).forEach(p => {
-    embed.addFields({
-      name: `#${p.id} • ${p.produto_nome}`,
-      value: `👤 <@${p.comprador_id}> | 📅 ${p.criado_em}`,
-      inline: false,
-    });
+  pedidos.slice(0, 10).forEach(p => {
+    embed.addFields({ name: `Pedido #${p.id} • ${p.produto_nome}`, value: `👤 Comprador: <@${p.comprador_id}>\n📅 Criado em: ${p.criado_em}`, inline: false });
   });
   return embed;
-}
-
-function embedLog(tipo, descricao, autorId) {
-  const cores = { registro: COR.sucesso, compra: COR.pix, admin: COR.admin, erro: COR.erro, youtube: 0xFF0000 };
-  return new EmbedBuilder()
-    .setColor(cores[tipo] || COR.info)
-    .setTitle(`📋 Log — ${tipo.toUpperCase()}`)
-    .setDescription(descricao)
-    .addFields({ name: '👤 Autor', value: autorId ? `<@${autorId}>` : 'Sistema', inline: true })
-    .setTimestamp()
-    .setFooter(FOOTER);
-}
-
-function embedErro(msg) {
-  return new EmbedBuilder()
-    .setColor(COR.erro)
-    .setTitle('❌ Erro')
-    .setDescription(msg)
-    .setFooter(FOOTER);
 }
 
 function embedSucesso(msg) {
-  return new EmbedBuilder()
-    .setColor(COR.sucesso)
-    .setTitle('✅ Sucesso')
-    .setDescription(msg)
-    .setFooter(FOOTER);
+  return new EmbedBuilder().setColor(COR.sucesso).setDescription(`✅ ${msg}`);
 }
-
-// ── XIT Coin ─────────────────────────────────────────────
-
-function embedSaldo(member, saldo) {
+function embedErro(msg) {
+  return new EmbedBuilder().setColor(COR.erro).setDescription(`❌ ${msg}`);
+}
+function embedLog(tipo, desc, autorId) {
   return new EmbedBuilder()
-    .setColor(0xF1C40F)
-    .setTitle('🪙 Seu Saldo — XIT Coin')
-    .setDescription(`<@${member.id}>, você tem **${saldo} 🪙 XIT Coins**!`)
-    .addFields({ name: '💡 Como usar', value: 'Use suas moedas para comprar produtos diretamente na loja!', inline: false })
-    .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+    .setColor(tipo === 'admin' ? COR.admin : COR.principal)
+    .setTitle(`📝 Log: ${tipo.toUpperCase()}`)
+    .setDescription(desc)
+    .addFields({ name: 'Responsável', value: autorId ? `<@${autorId}>` : 'Sistema', inline: true })
     .setTimestamp()
     .setFooter(FOOTER);
 }
 
-function embedExtrato(member, transacoes) {
+// ── Carteira / Moeda ─────────────────────────────────────
+
+function embedSaldo(membro, saldo) {
+  return new EmbedBuilder()
+    .setColor(0xF1C40F)
+    .setTitle('🪙 Seu Saldo de XIT Coins')
+    .setDescription(`Olá <@${membro.id}>! Você possui:\n\n**${saldo} 🪙 XIT Coins**`)
+    .setThumbnail(membro.user.displayAvatarURL({ dynamic: true }))
+    .setFooter(FOOTER);
+}
+
+function embedExtrato(membro, transacoes) {
   const embed = new EmbedBuilder()
     .setColor(0xF1C40F)
-    .setTitle('📋 Extrato — XIT Coin')
-    .setDescription(`Últimas movimentações de <@${member.id}>`)
-    .setTimestamp()
+    .setTitle('📋 Seu Extrato de XIT Coins')
+    .setThumbnail(membro.user.displayAvatarURL({ dynamic: true }))
     .setFooter(FOOTER);
 
   if (!transacoes.length) {
-    embed.addFields({ name: 'Sem movimentações', value: 'Nenhuma transação encontrada.', inline: false });
-    return embed;
+    embed.setDescription('Você ainda não possui transações no histórico.');
+  } else {
+    const linhas = transacoes.map(t =>
+      `${t.tipo === 'credito' ? '➕' : '➖'} ${t.quantidade} 🪙 — ${t.descricao}`
+    ).join('\n');
+    embed.setDescription(linhas);
   }
-
-  transacoes.forEach(t => {
-    const sinal = t.tipo === 'credito' ? '➕' : '➖';
-    const cor   = t.tipo === 'credito' ? '+' : '-';
-    embed.addFields({
-      name: `${sinal} ${cor}${t.quantidade} 🪙 — ${t.descricao || t.tipo}`,
-      value: `📅 ${t.criado_em}`,
-      inline: false,
-    });
-  });
   return embed;
 }
 
-// Pacotes definidos centralizados — fácil de atualizar
-const PACOTES = {
-  100  : { coins: 100,  preco: '13,00', label: '100 🪙  — R$ 13' },
-  250  : { coins: 250,  preco: '30,00', label: '250 🪙  — R$ 30' },
-  500  : { coins: 500,  preco: '58,00', label: '500 🪙  — R$ 58' },
-  1000 : { coins: 1000, preco: '112,00', label: '1000 🪙 — R$ 112' },
-};
-
-function embedLojaCoins() {
+function embedPacotesMoeda() {
   const embed = new EmbedBuilder()
     .setColor(0xF1C40F)
-    .setTitle('🪙 Loja de XIT Coins')
+    .setTitle('🪙 Comprar XIT Coins')
     .setDescription(
-      '> Use XIT Coins para comprar produtos exclusivos da loja!\n\n' +
-      '**Como funciona:**\n' +
-      '1. Escolha um pacote abaixo\n' +
-      '2. Receba as instruções de pagamento na sua **DM**\n' +
-      '3. Pague via PIX e envie o comprovante para um @🛡️ ꜱᴛᴀꜰꜰ\n' +
-      '4. Suas moedas serão creditadas automaticamente! ✅'
+      'Compre coins para adquirir produtos na loja automaticamente!\n\n' +
+      '💰 **Pacotes disponíveis:**\n' +
+      '• **100 🪙** — R$ 13,00\n' +
+      '• **250 🪙** — R$ 30,00\n' +
+      '• **500 🪙** — R$ 58,00\n' +
+      '• **1000 🪙** — R$ 112,00\n\n' +
+      '> Escolha um pacote abaixo para receber as instruções de pagamento.'
     )
-    .addFields(
-      { name: '📦 Starter',  value: '**100 🪙**\nR$ 13,00',  inline: true },
-      { name: '📦 Plus',     value: '**250 🪙**\nR$ 30,00',  inline: true },
-      { name: '📦 Pro',      value: '**500 🪙**\nR$ 58,00',  inline: true },
-      { name: '📦 Elite',    value: '**1000 🪙**\nR$ 112,00', inline: true },
-      { name: '\u200b',      value: '\u200b',                 inline: true },
-      { name: '💡 Dica',     value: '250 🪙 = 1 produto padrão da loja', inline: true },
-    )
-    .setTimestamp()
     .setFooter(FOOTER);
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('btn_coin_100').setLabel('100 🪙 — R$13').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('btn_coin_250').setLabel('250 🪙 — R$30').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('btn_coin_500').setLabel('500 🪙 — R$58').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('btn_coin_1000').setLabel('1000 🪙 — R$112').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('btn_coin_100').setLabel('100 🪙').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('btn_coin_250').setLabel('250 🪙').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('btn_coin_500').setLabel('500 🪙').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('btn_coin_1000').setLabel('1000 🪙').setStyle(ButtonStyle.Primary),
   );
   return { embed, row };
 }
 
-function embedPacotesMoeda() {
-  return embedLojaCoins();
-}
-
-function embedPIXCoin(pacote, pedidoId) {
-  const p = PACOTES[pacote];
-  if (!p) return null;
+function embedPIXCoin(quantidade, pedidoId) {
+  const precos = { 100: '13,00', 250: '30,00', 500: '58,00', 1000: '112,00' };
+  const preco = precos[quantidade];
   return new EmbedBuilder()
-    .setColor(0x27AE60)
-    .setTitle('💳 Pagamento via PIX — XIT Coins')
-    .setDescription(`Você escolheu o pacote de **${p.coins} 🪙 XIT Coins**.\n\nRealize o pagamento e aguarde a confirmação!`)
+    .setColor(COR.pix)
+    .setTitle('💳 Pagamento de XIT Coins')
+    .setDescription(`Você solicitou **${quantidade} 🪙 XIT Coins**.\n\nRealize o pagamento abaixo e aguarde a confirmação.`)
     .addFields(
-      { name: '🪙 Moedas',     value: `**${p.coins} XIT Coins**`,                          inline: true },
-      { name: '💰 Valor',      value: `**R$ ${p.preco}**`,                                  inline: true },
-      { name: '🆔 Pedido',     value: `\`#coin-${pedidoId}\``,                              inline: true },
-      { name: '🔑 Chave PIX',  value: `\`${process.env.PIX_KEY || 'Contate um staff'}\``,  inline: false },
-      { name: '👤 Favorecido', value: process.env.PIX_NAME || 'Alpha Xit',                 inline: false },
-      { name: '📋 Próximo passo', value: 'Envie o comprovante para um **@🛡️ ꜱᴛᴀꜰꜰ** e aguarde a confirmação!', inline: false },
+      { name: '💰 Valor', value: `**R$ ${preco}**`, inline: true },
+      { name: '🆔 Pedido', value: `**#coin-${pedidoId}**`, inline: true },
+      { name: '🔑 Chave PIX', value: `\`${process.env.PIX_KEY || 'Contate um staff'}\``, inline: false },
+      { name: '👤 Favorecido', value: process.env.PIX_NAME || 'Alpha Xit', inline: false },
+      { name: '📋 Instruções', value: '1. Pague o valor exato\n2. Envie o comprovante para um **@🛡️ ꜱᴛᴀꜰꜰ**\n3. Suas moedas serão creditadas após a confirmação!', inline: false },
     )
     .setTimestamp()
-    .setFooter({ text: `⚡ Alpha Xit • Pedido Coin #${pedidoId}` });
+    .setFooter({ text: `⚡ Alpha Xit • Pedido #coin-${pedidoId}` });
 }
 
-function embedCoinRecebido(member, quantidade, novoSaldo) {
+function embedCoinRecebido(membro, quantidade, novoSaldo) {
   return new EmbedBuilder()
-    .setColor(0xF1C40F)
-    .setTitle('🪙 XIT Coins Recebidas!')
-    .setDescription(`<@${member.id}>, você recebeu **${quantidade} 🪙 XIT Coins**!`)
-    .addFields({ name: '💰 Saldo atual', value: `**${novoSaldo} 🪙**`, inline: true })
-    .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+    .setColor(COR.sucesso)
+    .setTitle('🪙 Coins Creditados!')
+    .setDescription(`Olá <@${membro.id}>! Foram adicionados **${quantidade} 🪙** à sua conta.`)
+    .addFields({ name: '💰 Novo Saldo', value: `**${novoSaldo} 🪙 XIT Coins**`, inline: true })
     .setTimestamp()
     .setFooter(FOOTER);
 }
 
-function embedSaldoInsuficiente(saldoAtual, precoCoins) {
+function embedSaldoInsuficiente(atual, necessario) {
   return new EmbedBuilder()
     .setColor(COR.erro)
     .setTitle('❌ Saldo Insuficiente')
-    .setDescription(`Você não tem XIT Coins suficientes para comprar este produto.`)
-    .addFields(
-      { name: '🪙 Seu saldo', value: `**${saldoAtual} 🪙**`, inline: true },
-      { name: '💸 Necessário', value: `**${precoCoins} 🪙**`, inline: true },
-      { name: '💡 Como obter', value: 'Compre mais XIT Coins usando o comando **/comprar-coins**!', inline: false },
-    )
+    .setDescription(`Você precisa de **${necessario} 🪙**, mas possui apenas **${atual} 🪙**.`)
+    .addFields({ name: '💡 Como conseguir?', value: 'Use `/comprar-coins` para ver os pacotes disponíveis.', inline: false })
     .setFooter(FOOTER);
 }
 
@@ -453,6 +405,6 @@ module.exports = {
   embedRegistroSucesso, embedJaRegistrado, embedBoasVindasDM,
   embedPIX, embedPedidoConfirmado, embedEntregaProduto,
   embedNovoVideo,
-  embedPedidosAbertos, embedLog, embedErro, embedSucesso,
-  embedSaldo, embedExtrato, embedLojaCoins, embedPacotesMoeda, embedPIXCoin, embedCoinRecebido, embedSaldoInsuficiente,
+  embedPedidosAbertos, embedSucesso, embedErro, embedLog,
+  embedSaldo, embedExtrato, embedPacotesMoeda, embedPIXCoin, embedCoinRecebido, embedSaldoInsuficiente
 };
