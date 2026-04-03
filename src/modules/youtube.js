@@ -16,9 +16,16 @@ function ytUrlToRSS(url) {
     return `https://www.youtube.com/feeds/videos.xml?user=${userMatch[1]}`;
   }
 
-  // Formato: @handle — tenta como user (pode não funcionar para handles novos)
+  // Formato: @handle — usa channel_id via variável de ambiente YOUTUBE_CHANNEL_ID
+  // Se YOUTUBE_CHANNEL_ID estiver definido, usa ele diretamente (mais confiável)
   const handleMatch = url.match(/@([\w-]+)/);
   if (handleMatch) {
+    const channelId = process.env.YOUTUBE_CHANNEL_ID;
+    if (channelId) {
+      return `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`;
+    }
+    // Fallback: tenta como user (pode não funcionar para handles novos)
+    console.warn('[YT] ⚠️  Handle @' + handleMatch[1] + ' detectado mas YOUTUBE_CHANNEL_ID não definido. Defina YOUTUBE_CHANNEL_ID=UCxxxxxxxx no Render para garantir funcionamento.');
     return `https://www.youtube.com/feeds/videos.xml?user=${handleMatch[1]}`;
   }
 
@@ -29,8 +36,9 @@ async function checkYouTube(client, primeiroCheck = false) {
   const guildId = process.env.GUILD_ID;
   if (!guildId) return;
 
-  const config = db.getYTConfig(guildId);
-  const ytUrl  = config?.yt_url || process.env.YOUTUBE_CHANNEL_URL;
+  // ✅ CORRIGIDO: getYTConfig é async — precisa de await
+  const config  = await db.getYTConfig(guildId);
+  const ytUrl   = config?.yt_url || process.env.YOUTUBE_CHANNEL_URL;
   const canalId = config?.canal_id;
 
   if (!ytUrl) return;
@@ -46,7 +54,7 @@ async function checkYouTube(client, primeiroCheck = false) {
     feed = await parser.parseURL(rssUrl);
   } catch (err) {
     if (err.message.includes('404')) {
-      console.warn('[YT] ⚠️  RSS 404 — use o ID do canal: youtube.com/channel/UCxxxxxxxx');
+      console.warn('[YT] ⚠️  RSS 404 — use o ID do canal: youtube.com/channel/UCxxxxxxxx ou defina YOUTUBE_CHANNEL_ID no Render');
     } else {
       console.error('[YT] Erro ao buscar RSS:', err.message);
     }
@@ -62,7 +70,8 @@ async function checkYouTube(client, primeiroCheck = false) {
   // Primeiro check do boot — só salva o ID, não posta
   if (primeiroCheck || !ultimoId) {
     if (videoId !== ultimoId) {
-      db.updateUltimoVideo(guildId, videoId);
+      // ✅ CORRIGIDO: updateUltimoVideo é async — precisa de await
+      await db.updateUltimoVideo(guildId, videoId);
       console.log(`[YT] Boot — vídeo mais recente salvo: ${latestVideo.title}`);
     } else {
       console.log('[YT] Boot — nenhum vídeo novo.');
@@ -76,7 +85,8 @@ async function checkYouTube(client, primeiroCheck = false) {
     return;
   }
 
-  db.updateUltimoVideo(guildId, videoId);
+  // ✅ CORRIGIDO: updateUltimoVideo é async — precisa de await
+  await db.updateUltimoVideo(guildId, videoId);
 
   const guild = client.guilds.cache.get(guildId);
   if (!guild) return;
