@@ -241,7 +241,15 @@ async function getYTConfig(guildId) { return getAsync(`SELECT * FROM yt_config W
 async function setYTConfig(guildId, canalId, ytUrl) {
   await _exec(`INSERT INTO yt_config (guild_id,canal_id,yt_url) VALUES (?,?,?) ON CONFLICT(guild_id) DO UPDATE SET canal_id=excluded.canal_id, yt_url=excluded.yt_url, ativo=1`, [guildId, canalId, ytUrl]);
 }
-async function updateUltimoVideo(guildId, videoId) { await _exec(`UPDATE yt_config SET ultimo_video_id=? WHERE guild_id=?`, [videoId, guildId]); }
+async function updateUltimoVideo(guildId, videoId) {
+  // ✅ CORREÇÃO CRÍTICA: Se a linha não existir, o UPDATE não faz nada. 
+  // Usamos INSERT ... ON CONFLICT para garantir que o ID seja salvo sempre.
+  await _exec(
+    `INSERT INTO yt_config (guild_id, ultimo_video_id) VALUES (?, ?)
+     ON CONFLICT(guild_id) DO UPDATE SET ultimo_video_id = excluded.ultimo_video_id`,
+    [guildId, videoId]
+  );
+}
 
 // ── Logs ──────────────────────────────────────────────────────────────────────
 async function addLog(guildId, tipo, descricao, autorId = '') {
