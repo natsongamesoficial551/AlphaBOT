@@ -34,6 +34,7 @@ async function checkYouTube(client) {
   const guildId = process.env.GUILD_ID;
   if (!guildId) return;
 
+  // 1. Busca a configuração atualizada do banco
   const config  = await db.getYTConfig(guildId);
   const ytUrl   = config?.yt_url || process.env.YOUTUBE_CHANNEL_URL;
   const canalId = config?.canal_id;
@@ -46,6 +47,7 @@ async function checkYouTube(client) {
     return;
   }
 
+  // 2. Busca o feed do YouTube
   let feed;
   try {
     feed = await parser.parseURL(rssUrl);
@@ -64,16 +66,19 @@ async function checkYouTube(client) {
   const videoId     = latestVideo.id || latestVideo.guid || latestVideo.link;
   const ultimoId    = config?.ultimo_video_id;
 
-  // ✅ NOVA LÓGICA: Se o vídeo mais recente for diferente do salvo no banco, POSTA.
-  // Isso cobre tanto o boot (se o bot estava desligado quando saiu vídeo) quanto o poller normal.
+  // 3. TRAVA DE SEGURANÇA: Se o ID for igual ao que já postamos, para aqui.
   if (videoId === ultimoId) {
-    console.log('[YT] Sem vídeo novo.');
+    console.log('[YT] Sem vídeo novo (ID já postado).');
     return;
   }
 
-  // Atualiza o banco IMEDIATAMENTE para evitar postagens duplicadas se o poller rodar rápido
+  // 4. SALVA NO BANCO PRIMEIRO:
+  // Salvamos o ID ANTES de postar. Se a postagem falhar, o ID já está lá.
+  // Isso evita que, se o bot reiniciar ou o poller rodar de novo rápido, ele poste duplicado.
+  console.log(`[YT] Novo vídeo detectado: ${latestVideo.title}. Salvando ID no banco...`);
   await db.updateUltimoVideo(guildId, videoId);
 
+  // 5. POSTAGEM NO DISCORD
   const guild = client.guilds.cache.get(guildId);
   if (!guild) return;
 
@@ -107,9 +112,9 @@ async function checkYouTube(client) {
       content: `${mencao} 🎬 Novo vídeo publicado!`.trim(),
       embeds: [embedNovoVideo(video)],
     });
-    console.log(`[YT] ✅ Vídeo postado: ${video.title}`);
+    console.log(`[YT] ✅ Vídeo postado com sucesso: ${video.title}`);
   } catch (err) {
-    console.error('[YT] Erro ao postar:', err.message);
+    console.error('[YT] Erro ao postar no Discord:', err.message);
   }
 }
 
@@ -117,11 +122,10 @@ function startYouTubePoller(client) {
   const intervalMin = parseInt(process.env.YOUTUBE_CHECK_INTERVAL) || 10;
   console.log(`[YT] Poller iniciado — checando a cada ${intervalMin} min`);
 
-  // ✅ Primeiro check: Roda 10 segundos após o boot.
-  // Se o vídeo mais recente do canal não estiver no banco, ele posta na hora.
-  setTimeout(() => checkYouTube(client), 10_000);
+  // Primeiro check: 15 segundos após o boot para dar tempo do DB conectar
+  setTimeout(() => checkYouTube(client), 15_000);
 
-  // Checks subsequentes:
+  // Checks subsequentes
   setInterval(() => checkYouTube(client), intervalMin * 60 * 1000);
 }
 
