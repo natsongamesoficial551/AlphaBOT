@@ -123,8 +123,8 @@ function embedProduto(produto) {
     .setTimestamp()
     .setFooter(FOOTER);
 
-  // Link/Arquivo removido do embed público para segurança
-  // if (produto.link) embed.addFields({ name: '🔗 Mais informações', value: produto.link, inline: false });
+  // Link/Arquivo removido do embed público para segurança total
+  // O Discord pode gerar preview se houver qualquer link na mensagem, então aqui só enviamos o essencial.
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -253,7 +253,11 @@ function embedEntregaProduto(produto) {
     .setDescription(`Seu produto **${produto.nome}** foi entregue! Aproveite! 🎉`)
     .setTimestamp()
     .setFooter(FOOTER);
-  if (produto.link) embed.addFields({ name: '🔗 Acesso', value: produto.link, inline: false });
+  
+  // Link externo só é exibido se NÃO for um arquivo do Discord
+  if (produto.link && !produto.link.includes('cdn.discordapp.com')) {
+    embed.addFields({ name: '🔗 Acesso', value: produto.link, inline: false });
+  }
   return embed;
 }
 

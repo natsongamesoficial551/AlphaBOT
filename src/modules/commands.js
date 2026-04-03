@@ -162,7 +162,6 @@ async function handleCommand(interaction) {
       const arquivo    = interaction.options.getAttachment('arquivo');
 
       // Salva a URL CDN do Discord no campo link, e o nome do arquivo em imagem_url
-      // (reutilizamos imagem_url para guardar o nome original do arquivo)
       const linkArquivo  = arquivo ? arquivo.url        : '';
       const nomeArquivo  = arquivo ? arquivo.name       : '';
 
@@ -174,14 +173,16 @@ async function handleCommand(interaction) {
         return interaction.editReply({ embeds: [embedErro('Canal de produtos pagos não encontrado. Verifique o ID no código.')] });
       }
 
+      // Embed público não contém o link
       const { embed, row } = embedProduto(produto);
       const msg = await canal.send({ embeds: [embed], components: [row] });
       await db.saveProdutoMsg(produto.id, msg.id, canal.id);
 
       const infoArquivo = arquivo
-        ? `\n📎 Arquivo: \`${nomeArquivo}\` — será enviado via DM na entrega.`
-        : '\n⚠️ Nenhum arquivo anexado — entrega sem arquivo.';
+        ? `\n📎 Arquivo: \`${nomeArquivo}\` — salvo com segurança para entrega via DM.`
+        : '\n⚠️ Nenhum arquivo anexado.';
 
+      // Resposta efêmera sem link para evitar preview
       await interaction.editReply({ embeds: [embedSucesso(`Produto **${nome}** publicado em <#${canal.id}>! ID: \`#${produto.id}\`${infoArquivo}`)] });
       _log(guild, 'admin', `Produto **${nome}** (ID #${produto.id}) adicionado por <@${user.id}>`, user.id);
       return;
@@ -196,7 +197,6 @@ async function handleCommand(interaction) {
       const arquivo   = interaction.options.getAttachment('arquivo');
       const linkTexto = interaction.options.getString('link') || '';
 
-      // Arquivo tem prioridade sobre link de texto
       const linkArquivo = arquivo ? arquivo.url  : linkTexto;
       const nomeArquivo = arquivo ? arquivo.name : '';
 
@@ -213,10 +213,10 @@ async function handleCommand(interaction) {
       await db.saveProdutoMsg(produto.id, msg.id, canal.id);
 
       const infoEntrega = arquivo
-        ? `\n📎 Arquivo: \`${nomeArquivo}\` — será enviado via DM.`
+        ? `\n📎 Arquivo: \`${nomeArquivo}\` — salvo para entrega via DM.`
         : linkTexto
-          ? `\n🔗 Link configurado.`
-          : '\n⚠️ Nenhum arquivo ou link configurado.';
+          ? `\n🔗 Link externo configurado.`
+          : '\n⚠️ Nada configurado.';
 
       await interaction.editReply({ embeds: [embedSucesso(`Produto gratuito **${nome}** publicado em <#${canal.id}>! ID: \`#${produto.id}\`${infoEntrega}`)] });
       _log(guild, 'admin', `Produto gratuito **${nome}** (ID #${produto.id}) adicionado por <@${user.id}>`, user.id);
@@ -269,7 +269,7 @@ async function handleCommand(interaction) {
 
       await db.confirmarPedido(pedidoId);
 
-      // Pedido de COIN — credita moedas automaticamente
+      // Pedido de COIN
       if (pedido.produto_nome?.startsWith('COIN-')) {
         const quantidade = parseInt(pedido.produto_nome.replace('COIN-', ''));
         const validos = [100, 250, 500, 1000];
@@ -294,18 +294,16 @@ async function handleCommand(interaction) {
       const produto     = await db.getProduto(pedido.produto_id);
       const nomeProduto = produto?.nome || pedido.produto_nome || 'Produto';
       const linkProduto = produto?.link || null;
-      const nomeArquivo = produto?.imagem_url || null; // nome original do arquivo
+      const nomeArquivo = produto?.imagem_url || null;
 
       try {
         const comprador = await interaction.client.users.fetch(pedido.comprador_id);
         await comprador.send({ embeds: [embedPedidoConfirmado({ nome: nomeProduto }, pedido.comprador_id)] });
 
         if (linkProduto) {
-          // Verifica se é URL CDN do Discord (arquivo enviado pelo admin)
           if (_isDiscordCDN(linkProduto)) {
             await _enviarArquivoDM(comprador, nomeProduto, linkProduto, nomeArquivo);
           } else {
-            // Link externo normal (ex: Mediafire)
             await comprador.send({ embeds: [embedEntregaProduto({ nome: nomeProduto, link: linkProduto })] });
           }
         }
@@ -598,26 +596,13 @@ async function handleCommand(interaction) {
 
 // ── Helpers ───────────────────────────────────────────────
 
-/**
- * Verifica se a URL é do CDN do Discord (arquivo enviado diretamente pelo Discord).
- */
 function _isDiscordCDN(url) {
   if (!url) return false;
   return url.startsWith('https://cdn.discordapp.com/') ||
          url.startsWith('https://media.discordapp.net/');
 }
 
-/**
- * Baixa o arquivo da URL CDN do Discord e envia como attachment na DM do usuário.
- * Se o download falhar, cai de volta para enviar o link no embed.
- * @param {import('discord.js').User} destinatario
- * @param {string} nomeProduto
- * @param {string} urlArquivo  URL CDN do Discord
- * @param {string|null} nomeArquivo  Nome original do arquivo (ex: produto.zip)
- */
 async function _enviarArquivoDM(destinatario, nomeProduto, urlArquivo, nomeArquivo) {
-  const https = require('https');
-  const http  = require('http');
   const { EmbedBuilder } = require('discord.js');
 
   const embedEntrega = new EmbedBuilder()
@@ -628,14 +613,14 @@ async function _enviarArquivoDM(destinatario, nomeProduto, urlArquivo, nomeArqui
     .setFooter({ text: '⚡ Alpha Xit' });
 
   try {
-    // Baixa o arquivo em memória como Buffer
     const buffer = await _downloadBuffer(urlArquivo);
     const fileName = nomeArquivo || _nomeDoUrl(urlArquivo);
     const attachment = new AttachmentBuilder(buffer, { name: fileName });
+    
+    // Enviamos o arquivo como anexo real (upload), cortando o vínculo com a URL original
     await destinatario.send({ embeds: [embedEntrega], files: [attachment] });
   } catch (err) {
     console.error('[ENTREGA] Falha ao baixar/enviar arquivo, enviando link:', err.message);
-    // Fallback: envia o link direto
     embedEntrega.setDescription(
       `Seu produto **${nomeProduto}** foi entregue! Aproveite! 🎉`
     ).addFields({ name: '🔗 Download', value: urlArquivo, inline: false });
@@ -643,14 +628,10 @@ async function _enviarArquivoDM(destinatario, nomeProduto, urlArquivo, nomeArqui
   }
 }
 
-/**
- * Baixa uma URL e retorna um Buffer com o conteúdo.
- */
 function _downloadBuffer(url) {
   return new Promise((resolve, reject) => {
     const lib = url.startsWith('https') ? require('https') : require('http');
     lib.get(url, (res) => {
-      // Segue redirecionamentos
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         return _downloadBuffer(res.headers.location).then(resolve).catch(reject);
       }
@@ -665,9 +646,6 @@ function _downloadBuffer(url) {
   });
 }
 
-/**
- * Extrai o nome do arquivo de uma URL.
- */
 function _nomeDoUrl(url) {
   try {
     const partes = new URL(url).pathname.split('/');
