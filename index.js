@@ -60,39 +60,30 @@ client.once('ready', async () => {
     await seedTodosCanais(guild);
     console.log('[SEED] Concluído');
 
-    // Sistema de Registro Automático
-    try {
-        const { embedRegistro, rowRegistro } = require('./src/modules/registration');
-        const db = require('./src/database');
-        
-        // Procura por nome exato ou que contenha "registro"
-        const canalRegistro = guild.channels.cache.find(c => c.name === '🪪・registro' || c.name.includes('registro'));
-        
-        if (canalRegistro) {
-            const fixa = await db.getMsgFixa(guild.id, 'registro');
-            let enviarNova = false;
+    // Sistema de Registro Automático (Forçado)
+    setTimeout(async () => {
+        try {
+            const { embedRegistro, rowRegistro } = require('./src/modules/registration');
+            const db = require('./src/database');
+            const canalRegistro = guild.channels.cache.find(c => c.name === '🪪・registro' || c.name.includes('registro'));
+            
+            if (canalRegistro) {
+                // Limpa mensagens antigas do bot no canal para não duplicar
+                const msgs = await canalRegistro.messages.fetch({ limit: 50 });
+                const antigas = msgs.filter(m => m.author.id === client.user.id);
+                if (antigas.size > 0) await canalRegistro.bulkDelete(antigas).catch(() => {});
 
-            if (fixa) {
-                // Tenta buscar a mensagem para ver se ela ainda existe
-                try {
-                    const msgExistente = await canalRegistro.messages.fetch(fixa.message_id);
-                    if (!msgExistente) enviarNova = true;
-                } catch (e) {
-                    enviarNova = true; // Mensagem foi deletada manualmente
-                }
-            } else {
-                enviarNova = true;
-            }
-
-            if (enviarNova) {
-                const msg = await canalRegistro.send({ embeds: [embedRegistro()], components: [rowRegistro()] });
+                // Envia a nova mensagem com o botão
+                const msg = await canalRegistro.send({ 
+                    embeds: [embedRegistro()], 
+                    components: [rowRegistro()] 
+                });
+                
                 await db.saveMsgFixa(guild.id, canalRegistro.id, 'registro', msg.id);
-                console.log(`[REGISTRO] ✅ Mensagem de registro enviada/atualizada em ${guild.name}`);
+                console.log(`[REGISTRO] ✅ Mensagem enviada com sucesso em ${guild.name}`);
             }
-        } else {
-            console.warn(`[REGISTRO] ⚠️ Canal de registro não encontrado em ${guild.name}`);
-        }
-    } catch (err) { console.error('[AUTO-REGISTRO ERROR]', err.message); }
+        } catch (err) { console.error('[AUTO-REGISTRO ERROR]', err.message); }
+    }, 5000); // Espera 5 segundos para garantir que o bot carregou tudo
   }
 
   startYouTubePoller(client);
