@@ -1,17 +1,21 @@
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require('discord.js');
+/**
+ * store.js — Sistema de Loja com Planos
+ */
+const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const db = require('../database');
 
 async function embedLoja() {
     const planos = await db.getPlanos();
     
     const embed = new EmbedBuilder()
-        .setColor(0xF1C40F)
-        .setTitle('🗂️ Loja Alpha Xit — Planos')
+        .setColor(0x00FF00)
+        .setTitle('🗂️ Loja Oficial — Alpha Xit')
         .setDescription(
-            'Escolha um de nossos planos para acessar o software!\n\n' +
+            'Selecione um dos nossos planos abaixo para adquirir acesso imediato ao nosso software.\n\n' +
             '**Planos Disponíveis:**'
         )
-        .setFooter({ text: 'Alpha Xit • Loja' });
+        .setTimestamp()
+        .setFooter({ text: 'Alpha Xit • Pagamento Automático via PIX' });
 
     const tipos = ['semanal', 'mensal', 'bimestral'];
     
@@ -21,8 +25,8 @@ async function embedLoja() {
         const estoque = plano ? plano.estoque : 0;
         
         embed.addFields({
-            name: `📍 Plano ${tipo.charAt(0).toUpperCase() + tipo.slice(1)}`,
-            value: `💰 Preço: \`${preco}\`\n📦 Estoque: \`${estoque}\``,
+            name: `🔹 Plano ${tipo.toUpperCase()}`,
+            value: `💰 **Preço:** ${preco}\n📦 **Estoque:** ${estoque} unidades`,
             inline: false
         });
     }
@@ -43,7 +47,7 @@ async function rowLoja() {
         return new ActionRowBuilder().addComponents(
             new ButtonBuilder()
                 .setCustomId('btn_loja_sem_estoque')
-                .setLabel('Sem estoque no momento')
+                .setLabel('Sem estoque disponível')
                 .setStyle(ButtonStyle.Secondary)
                 .setDisabled(true)
         );
@@ -52,7 +56,7 @@ async function rowLoja() {
     return new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
             .setCustomId('menu_loja_planos')
-            .setPlaceholder('Selecione um plano para comprar')
+            .setPlaceholder('Escolha o seu plano aqui...')
             .addOptions(options)
     );
 }
