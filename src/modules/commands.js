@@ -1,5 +1,5 @@
 /**
- * commands.js — Versão Final (Produtos com 4 Planos)
+ * commands.js — Versão Corrigida (produto-add envia direto na loja)
  */
 const {
   SlashCommandBuilder, PermissionFlagsBits,
@@ -10,7 +10,7 @@ const db = require('../database');
 const commands = [
   new SlashCommandBuilder()
     .setName('produto-add')
-    .setDescription('Adiciona um novo produto com os 4 planos')
+    .setDescription('Adiciona um novo produto com os 4 planos diretamente na loja')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addStringOption(o => o.setName('nome').setDescription('Nome do produto').setRequired(true))
     .addStringOption(o => o.setName('descricao').setDescription('Descrição do produto').setRequired(true))
@@ -23,16 +23,6 @@ const commands = [
     .addStringOption(o => o.setName('imagem').setDescription('URL da Imagem').setRequired(true))
     .addIntegerOption(o => o.setName('estoque').setDescription('Quantidade em estoque').setRequired(true)),
 
-  new SlashCommandBuilder()
-    .setName('loja-setup')
-    .setDescription('Envia o embed da loja no canal atual')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
-  new SlashCommandBuilder()
-    .setName('registro-setup')
-    .setDescription('Envia o embed de registro manual (caso precise)')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-    
   new SlashCommandBuilder()
     .setName('limpar')
     .setDescription('Limpa mensagens do canal')
@@ -61,29 +51,22 @@ async function handleCommand(interaction) {
       const img = options.getString('imagem');
       const est = options.getInteger('estoque');
 
-      await db.addProdutoFull(nome, desc, recs, pD, pS, pM, pB, link, img, est);
-      await logAction(guild, 'ADMIN', `Novo produto adicionado: **${nome}**`, user);
+      // Adiciona no banco de dados
+      const produto = await db.addProdutoFull(nome, desc, recs, pD, pS, pM, pB, link, img, est);
       
-      return interaction.editReply({ content: `✅ Produto **${nome}** adicionado com sucesso!` });
-    }
-
-    if (commandName === 'loja-setup') {
-      const { embedLoja, rowLoja } = require('./store');
-      const produtos = await db.listarProdutos();
-      
-      for (const p of produtos) {
-        const embed = await embedLoja(p);
-        const row = await rowLoja(p);
-        await interaction.channel.send({ embeds: [embed], components: [row] });
+      // Envia automaticamente no canal de loja
+      const canalLoja = guild.channels.cache.find(c => c.name === '🗂️・loja');
+      if (canalLoja) {
+          const { embedLoja, rowLoja } = require('./store');
+          const embed = await embedLoja(produto);
+          const row = await rowLoja(produto);
+          const msg = await canalLoja.send({ embeds: [embed], components: [row] });
+          // Salva o ID da mensagem para futuras edições/deletar
+          await db.saveProdutoMsg(produto.id, msg.id, canalLoja.id);
       }
-      
-      return interaction.reply({ content: '✅ Loja enviada!', flags: MessageFlags.Ephemeral });
-    }
 
-    if (commandName === 'registro-setup') {
-      const { embedRegistro, rowRegistro } = require('./registration');
-      await interaction.channel.send({ embeds: [embedRegistro()], components: [rowRegistro()] });
-      return interaction.reply({ content: '✅ Registro enviado!', flags: MessageFlags.Ephemeral });
+      await logAction(guild, 'ADMIN', `Novo produto **${nome}** adicionado e enviado para a loja.`, user);
+      return interaction.editReply({ content: `✅ Produto **${nome}** adicionado e enviado para a loja!` });
     }
 
     if (commandName === 'limpar') {
@@ -94,6 +77,11 @@ async function handleCommand(interaction) {
 
   } catch (err) {
     console.error('[COMMAND ERROR]', err.message);
+    if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: `❌ Erro: ${err.message}`, flags: MessageFlags.Ephemeral });
+    } else {
+        await interaction.editReply({ content: `❌ Erro: ${err.message}` });
+    }
   }
 }
 

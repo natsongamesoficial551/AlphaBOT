@@ -64,16 +64,35 @@ client.once('ready', async () => {
     try {
         const { embedRegistro, rowRegistro } = require('./src/modules/registration');
         const db = require('./src/database');
-        const canalRegistro = guild.channels.cache.find(c => c.name === '🪪・registro');
+        
+        // Procura por nome exato ou que contenha "registro"
+        const canalRegistro = guild.channels.cache.find(c => c.name === '🪪・registro' || c.name.includes('registro'));
+        
         if (canalRegistro) {
             const fixa = await db.getMsgFixa(guild.id, 'registro');
-            if (!fixa) {
+            let enviarNova = false;
+
+            if (fixa) {
+                // Tenta buscar a mensagem para ver se ela ainda existe
+                try {
+                    const msgExistente = await canalRegistro.messages.fetch(fixa.message_id);
+                    if (!msgExistente) enviarNova = true;
+                } catch (e) {
+                    enviarNova = true; // Mensagem foi deletada manualmente
+                }
+            } else {
+                enviarNova = true;
+            }
+
+            if (enviarNova) {
                 const msg = await canalRegistro.send({ embeds: [embedRegistro()], components: [rowRegistro()] });
                 await db.saveMsgFixa(guild.id, canalRegistro.id, 'registro', msg.id);
-                console.log(`[REGISTRO] Mensagem fixa enviada em ${guild.name}`);
+                console.log(`[REGISTRO] ✅ Mensagem de registro enviada/atualizada em ${guild.name}`);
             }
+        } else {
+            console.warn(`[REGISTRO] ⚠️ Canal de registro não encontrado em ${guild.name}`);
         }
-    } catch (err) { console.error('[AUTO-REGISTRO]', err.message); }
+    } catch (err) { console.error('[AUTO-REGISTRO ERROR]', err.message); }
   }
 
   startYouTubePoller(client);

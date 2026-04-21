@@ -200,9 +200,16 @@ async function addProdutoFull(nome, descricao, recursos, precoD, precoS, precoM,
   );
   return getAsync(`SELECT * FROM produtos WHERE id=?`, [Number(r.lastInsertRowid)]);
 }
+// Alias para compatibilidade com partes que ainda usem addProduto
+async function addProduto(nome, desc, preco, precoC, link, img, cat, tipo, imgB, recs) {
+    return addProdutoFull(nome, desc, recs, 0, 0, 0, 0, link, img, 0);
+}
 async function listarProdutos(tipo = null) {
   if (tipo) return queryAsync(`SELECT * FROM produtos WHERE ativo=1 AND tipo=? ORDER BY id DESC`, [tipo]);
   return queryAsync(`SELECT * FROM produtos WHERE ativo=1 ORDER BY id DESC`);
+}
+async function getPlanos() {
+    return queryAsync(`SELECT * FROM planos`);
 }
 async function getProduto(id) { return getAsync(`SELECT * FROM produtos WHERE id=? AND ativo=1`, [id]); }
 async function deletarProduto(id) { await _exec(`UPDATE produtos SET ativo=0 WHERE id=?`, [id]); }
