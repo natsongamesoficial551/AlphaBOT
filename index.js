@@ -59,6 +59,21 @@ client.once('ready', async () => {
   if (guild) {
     await seedTodosCanais(guild);
     console.log('[SEED] Concluído');
+
+    // Sistema de Registro Automático
+    try {
+        const { embedRegistro, rowRegistro } = require('./src/modules/registration');
+        const db = require('./src/database');
+        const canalRegistro = guild.channels.cache.find(c => c.name === '🪪・registro');
+        if (canalRegistro) {
+            const fixa = await db.getMsgFixa(guild.id, 'registro');
+            if (!fixa) {
+                const msg = await canalRegistro.send({ embeds: [embedRegistro()], components: [rowRegistro()] });
+                await db.saveMsgFixa(guild.id, canalRegistro.id, 'registro', msg.id);
+                console.log(`[REGISTRO] Mensagem fixa enviada em ${guild.name}`);
+            }
+        }
+    } catch (err) { console.error('[AUTO-REGISTRO]', err.message); }
   }
 
   startYouTubePoller(client);
@@ -118,11 +133,12 @@ client.on('messageCreate', async (message) => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
-    const { handleButton, handleModal } = require('./src/modules/buttons');
+    const { handleButton, handleModal, handleSelectMenu } = require('./src/modules/buttons');
     const { handleCommand }             = require('./src/modules/commands');
     if (interaction.isButton())               await handleButton(interaction);
     else if (interaction.isChatInputCommand()) await handleCommand(interaction);
     else if (interaction.isModalSubmit())      await handleModal(interaction);
+    else if (interaction.isStringSelectMenu()) await handleSelectMenu(interaction);
   } catch (err) {
     console.error('[INTERACTION]', err.message);
     try {

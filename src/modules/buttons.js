@@ -50,25 +50,30 @@ async function handleSelectMenu(interaction) {
   if (!(await checkSecurity(interaction))) return;
 
   try {
-    if (customId === 'menu_loja_planos') {
-        const value = values[0];
-        if (value.startsWith('compra_plano_')) {
-            const tipo = value.replace('compra_plano_', '');
-            const plano = await db.getPlano(tipo);
-            
-            if (!plano || plano.estoque <= 0) {
-                return interaction.reply({ content: '❌ Este plano está sem estoque no momento.', flags: 64 });
-            }
+    if (customId.startsWith('menu_compra_')) {
+        const value = values[0]; // compra_ID_PLANO
+        const parts = value.split('_');
+        const produtoId = parseInt(parts[1]);
+        const planoTipo = parts[2];
 
-            const { iniciarCompraPlanoPIX } = require('./pixCompra');
-            await interaction.deferReply({ flags: 64 });
-            
-            const pedidoId = await db.criarPedido(0, `Plano ${tipo}`, user.id, user.username);
-            await iniciarCompraPlanoPIX(interaction.client, guild, user, plano, pedidoId);
-            
-            await interaction.editReply({ content: '✅ Instruções de pagamento enviadas na sua DM!' });
-            await logAction(guild, 'COMPRA', `<@${user.id}> iniciou compra do **Plano ${tipo}** (#${pedidoId})`, user);
+        const produto = await db.getProduto(produtoId);
+        if (!produto || produto.estoque <= 0) {
+            return interaction.reply({ content: '❌ Produto sem estoque.', flags: 64 });
         }
+
+        const preco = produto[`preco_${planoTipo}`];
+        const { iniciarCompraPlanoPIX } = require('./pixCompra');
+        await interaction.deferReply({ flags: 64 });
+        
+        const pedidoId = await db.criarPedido(produto.id, `${produto.nome} (${planoTipo})`, user.id, user.username);
+        
+        // Simula o objeto plano esperado pelo pixCompra
+        const planoFake = { tipo: `${produto.nome} - ${planoTipo}`, preco: preco, estoque: produto.estoque };
+        
+        await iniciarCompraPlanoPIX(interaction.client, guild, user, planoFake, pedidoId);
+        
+        await interaction.editReply({ content: '✅ Instruções de pagamento enviadas na sua DM!' });
+        await logAction(guild, 'COMPRA', `<@${user.id}> iniciou compra de **${produto.nome}** (${planoTipo})`, user);
     }
   } catch (err) {
     console.error('[SELECT MENU ERROR]', err.message);

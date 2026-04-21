@@ -1,27 +1,26 @@
 /**
- * commands.js — Versão Final Refatorada (Planos e Registro)
+ * commands.js — Versão Final (Produtos com 4 Planos)
  */
-
 const {
   SlashCommandBuilder, PermissionFlagsBits,
-  ActionRowBuilder, ButtonBuilder, ButtonStyle,
-  EmbedBuilder, MessageFlags, StringSelectMenuBuilder,
+  EmbedBuilder, MessageFlags,
 } = require('discord.js');
 const db = require('../database');
 
 const commands = [
-  // Planos e Configurações
   new SlashCommandBuilder()
-    .setName('planos-set')
-    .setDescription('Configura preço e estoque de um plano')
+    .setName('produto-add')
+    .setDescription('Adiciona um novo produto com os 4 planos')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addStringOption(o => o.setName('plano').setDescription('Tipo do plano').setRequired(true)
-      .addChoices(
-        { name: 'Semanal', value: 'semanal' },
-        { name: 'Mensal', value: 'mensal' },
-        { name: 'Bimestral', value: 'bimestral' }
-      ))
-    .addNumberOption(o => o.setName('preco').setDescription('Preço do plano (ex: 29.90)').setRequired(true))
+    .addStringOption(o => o.setName('nome').setDescription('Nome do produto').setRequired(true))
+    .addStringOption(o => o.setName('descricao').setDescription('Descrição do produto').setRequired(true))
+    .addStringOption(o => o.setName('recursos').setDescription('Recursos (separados por vírgula)').setRequired(true))
+    .addNumberOption(o => o.setName('diario').setDescription('Preço Diário').setRequired(true))
+    .addNumberOption(o => o.setName('semanal').setDescription('Preço Semanal').setRequired(true))
+    .addNumberOption(o => o.setName('mensal').setDescription('Preço Mensal').setRequired(true))
+    .addNumberOption(o => o.setName('bimestral').setDescription('Preço Bimestral').setRequired(true))
+    .addStringOption(o => o.setName('link').setDescription('Link do arquivo/download').setRequired(true))
+    .addStringOption(o => o.setName('imagem').setDescription('URL da Imagem').setRequired(true))
     .addIntegerOption(o => o.setName('estoque').setDescription('Quantidade em estoque').setRequired(true)),
 
   new SlashCommandBuilder()
@@ -31,126 +30,70 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('registro-setup')
-    .setDescription('Envia o embed de registro no canal atual')
+    .setDescription('Envia o embed de registro manual (caso precise)')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
-  // Utilitários
+    
   new SlashCommandBuilder()
-    .setName('anuncio')
-    .setDescription('Envia um anúncio em um canal')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
-    .addStringOption(o => o.setName('titulo').setDescription('Título do anúncio').setRequired(true))
-    .addStringOption(o => o.setName('mensagem').setDescription('Mensagem').setRequired(true))
-    .addChannelOption(o => o.setName('canal').setDescription('Canal destino').setRequired(false)),
-
-  new SlashCommandBuilder()
-    .setName('cargo')
-    .setDescription('Adiciona ou remove cargo de um membro')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
-    .addSubcommand(s => s.setName('add').setDescription('Adiciona cargo')
-      .addUserOption(o => o.setName('usuario').setDescription('Usuário').setRequired(true))
-      .addRoleOption(o => o.setName('cargo').setDescription('Cargo').setRequired(true)))
-    .addSubcommand(s => s.setName('remove').setDescription('Remove cargo')
-      .addUserOption(o => o.setName('usuario').setDescription('Usuário').setRequired(true))
-      .addRoleOption(o => o.setName('cargo').setDescription('Cargo').setRequired(true))),
-
-  new SlashCommandBuilder()
-    .setName('moderar')
-    .setDescription('Ações de moderação')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
-    .addSubcommand(s => s.setName('ban').setDescription('Bane um usuário')
-      .addUserOption(o => o.setName('usuario').setDescription('Usuário').setRequired(true))
-      .addStringOption(o => o.setName('motivo').setDescription('Motivo').setRequired(false)))
-    .addSubcommand(s => s.setName('kick').setDescription('Expulsa um usuário')
-      .addUserOption(o => o.setName('usuario').setDescription('Usuário').setRequired(true))
-      .addStringOption(o => o.setName('motivo').setDescription('Motivo').setRequired(false))),
+    .setName('limpar')
+    .setDescription('Limpa mensagens do canal')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+    .addIntegerOption(o => o.setName('quantidade').setDescription('Qtd de mensagens').setRequired(true)),
 ];
 
 async function handleCommand(interaction) {
-  const { commandName, guild, user } = interaction;
+  const { commandName, guild, user, options } = interaction;
   const { checkSecurity, logAction } = require('./security');
 
-  // Verifica segurança antes de qualquer comando
   if (!(await checkSecurity(interaction))) return;
 
   try {
-    // ── /planos-set ──────────────────────────────────────
-    if (commandName === 'planos-set') {
-      const tipo = interaction.options.getString('plano');
-      const preco = interaction.options.getNumber('preco');
-      const estoque = interaction.options.getInteger('estoque');
-
-      await db.setPlano(tipo, preco, estoque);
-      await logAction(guild, 'ADMIN', `Plano **${tipo}** atualizado: R$ ${preco} | Estoque: ${estoque}`, user);
+    if (commandName === 'produto-add') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       
-      const { embedSucesso } = require('../embeds');
-      return interaction.reply({ embeds: [embedSucesso(`Plano **${tipo}** configurado com sucesso!`) ], flags: MessageFlags.Ephemeral });
+      const nome = options.getString('nome');
+      const desc = options.getString('descricao');
+      const recs = options.getString('recursos');
+      const pD = options.getNumber('diario');
+      const pS = options.getNumber('semanal');
+      const pM = options.getNumber('mensal');
+      const pB = options.getNumber('bimestral');
+      const link = options.getString('link');
+      const img = options.getString('imagem');
+      const est = options.getInteger('estoque');
+
+      await db.addProdutoFull(nome, desc, recs, pD, pS, pM, pB, link, img, est);
+      await logAction(guild, 'ADMIN', `Novo produto adicionado: **${nome}**`, user);
+      
+      return interaction.editReply({ content: `✅ Produto **${nome}** adicionado com sucesso!` });
     }
 
-    // ── /loja-setup ──────────────────────────────────────
     if (commandName === 'loja-setup') {
       const { embedLoja, rowLoja } = require('./store');
-      const embed = await embedLoja();
-      const row = await rowLoja();
+      const produtos = await db.listarProdutos();
       
-      await interaction.channel.send({ embeds: [embed], components: [row] });
+      for (const p of produtos) {
+        const embed = await embedLoja(p);
+        const row = await rowLoja(p);
+        await interaction.channel.send({ embeds: [embed], components: [row] });
+      }
+      
       return interaction.reply({ content: '✅ Loja enviada!', flags: MessageFlags.Ephemeral });
     }
 
-    // ── /registro-setup ──────────────────────────────────────
     if (commandName === 'registro-setup') {
       const { embedRegistro, rowRegistro } = require('./registration');
       await interaction.channel.send({ embeds: [embedRegistro()], components: [rowRegistro()] });
-      return interaction.reply({ content: '✅ Sistema de Registro enviado!', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: '✅ Registro enviado!', flags: MessageFlags.Ephemeral });
     }
 
-    // ── /anuncio ──────────────────────────────────────
-    if (commandName === 'anuncio') {
-      const titulo = interaction.options.getString('titulo');
-      const msg = interaction.options.getString('mensagem');
-      const canal = interaction.options.getChannel('canal') || interaction.channel;
-
-      const embed = new EmbedBuilder().setColor(0x9B59B6).setTitle(titulo).setDescription(msg).setTimestamp();
-      await canal.send({ embeds: [embed] });
-      return interaction.reply({ content: 'Anúncio enviado!', flags: MessageFlags.Ephemeral });
-    }
-
-    // ── /cargo ──────────────────────────────────────
-    if (commandName === 'cargo') {
-      const sub = interaction.options.getSubcommand();
-      const target = interaction.options.getMember('usuario');
-      const role = interaction.options.getRole('cargo');
-
-      if (sub === 'add') {
-        await target.roles.add(role);
-        return interaction.reply({ content: `Cargo ${role.name} adicionado a ${target.user.tag}`, flags: MessageFlags.Ephemeral });
-      } else {
-        await target.roles.remove(role);
-        return interaction.reply({ content: `Cargo ${role.name} removido de ${target.user.tag}`, flags: MessageFlags.Ephemeral });
-      }
-    }
-
-    // ── /moderar ──────────────────────────────────────
-    if (commandName === 'moderar') {
-      const sub = interaction.options.getSubcommand();
-      const target = interaction.options.getMember('usuario');
-      const motivo = interaction.options.getString('motivo') || 'Sem motivo especificado';
-
-      if (sub === 'ban') {
-        await target.ban({ reason: motivo });
-        return interaction.reply({ content: `Usuário ${target.user.tag} banido.`, flags: MessageFlags.Ephemeral });
-      } else if (sub === 'kick') {
-        await target.kick(motivo);
-        return interaction.reply({ content: `Usuário ${target.user.tag} expulso.`, flags: MessageFlags.Ephemeral });
-      }
+    if (commandName === 'limpar') {
+      const qtd = options.getInteger('quantidade');
+      await interaction.channel.bulkDelete(qtd);
+      return interaction.reply({ content: `✅ ${qtd} mensagens limpas!`, flags: MessageFlags.Ephemeral });
     }
 
   } catch (err) {
     console.error('[COMMAND ERROR]', err.message);
-    const { embedErro } = require('../embeds');
-    if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ embeds: [embedErro(`Erro: ${err.message}`)], flags: MessageFlags.Ephemeral });
-    }
   }
 }
 

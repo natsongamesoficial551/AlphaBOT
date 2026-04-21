@@ -150,6 +150,10 @@ async function _createTables() {
     { table: 'produtos', column: 'canal_id',           def: `TEXT` },
     { table: 'membros',  column: 'xit_id',             def: `TEXT` },
     { table: 'pedidos',  column: 'mp_payment_id',      def: `TEXT` },
+    { table: 'produtos', column: 'preco_diario',       def: `REAL DEFAULT 0` },
+    { table: 'produtos', column: 'preco_semanal',      def: `REAL DEFAULT 0` },
+    { table: 'produtos', column: 'preco_mensal',       def: `REAL DEFAULT 0` },
+    { table: 'produtos', column: 'preco_bimestral',    def: `REAL DEFAULT 0` },
   ];
   for (const m of migrations) {
     try { await client.execute({ sql: `ALTER TABLE ${m.table} ADD COLUMN ${m.column} ${m.def}`, args: [] }); } catch (_) {}
@@ -189,10 +193,10 @@ async function totalMembros() {
 }
 
 // ── Produtos ──────────────────────────────────────────────────────────────────
-async function addProduto(nome, descricao, preco, precoCoins, link, imagemUrl, categoria, tipo = 'pago', imagemUrlBanner = '', recursos = '') {
+async function addProdutoFull(nome, descricao, recursos, precoD, precoS, precoM, precoB, link, imagemUrl, estoque) {
   const r = await _exec(
-    `INSERT INTO produtos (nome,descricao,tipo,preco,preco_coins,link,imagem_url,categoria,imagem_url_banner,recursos) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-    [nome, descricao, tipo, preco || 'Grátis', precoCoins || 0, link || '', imagemUrl || '', categoria || 'geral', imagemUrlBanner || '', recursos || '']
+    `INSERT INTO produtos (nome, descricao, recursos, preco_diario, preco_semanal, preco_mensal, preco_bimestral, link, imagem_url, estoque) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    [nome, descricao, recursos, precoD, precoS, precoM, precoB, link, imagemUrl, estoque]
   );
   return getAsync(`SELECT * FROM produtos WHERE id=?`, [Number(r.lastInsertRowid)]);
 }
