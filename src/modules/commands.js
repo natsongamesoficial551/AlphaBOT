@@ -1,5 +1,5 @@
 /**
- * commands.js — Versão Corrigida (produto-add envia direto na loja)
+ * commands.js — Versão Definitiva (Anexos e Loja Auto)
  */
 const {
   SlashCommandBuilder, PermissionFlagsBits,
@@ -19,8 +19,8 @@ const commands = [
     .addNumberOption(o => o.setName('semanal').setDescription('Preço Semanal').setRequired(true))
     .addNumberOption(o => o.setName('mensal').setDescription('Preço Mensal').setRequired(true))
     .addNumberOption(o => o.setName('bimestral').setDescription('Preço Bimestral').setRequired(true))
-    .addStringOption(o => o.setName('link').setDescription('Link do arquivo/download').setRequired(true))
-    .addStringOption(o => o.setName('imagem').setDescription('URL da Imagem').setRequired(true))
+    .addAttachmentOption(o => o.setName('arquivo').setDescription('O arquivo do software').setRequired(true))
+    .addAttachmentOption(o => o.setName('imagem').setDescription('A imagem do produto').setRequired(true))
     .addIntegerOption(o => o.setName('estoque').setDescription('Quantidade em estoque').setRequired(true)),
 
   new SlashCommandBuilder()
@@ -28,6 +28,11 @@ const commands = [
     .setDescription('Limpa mensagens do canal')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
     .addIntegerOption(o => o.setName('quantidade').setDescription('Qtd de mensagens').setRequired(true)),
+    
+  new SlashCommandBuilder()
+    .setName('registro-setup')
+    .setDescription('Força o envio da mensagem de registro')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 ];
 
 async function handleCommand(interaction) {
@@ -47,26 +52,24 @@ async function handleCommand(interaction) {
       const pS = options.getNumber('semanal');
       const pM = options.getNumber('mensal');
       const pB = options.getNumber('bimestral');
-      const link = options.getString('link');
-      const img = options.getString('imagem');
+      const arquivo = options.getAttachment('arquivo');
+      const imagem = options.getAttachment('imagem');
       const est = options.getInteger('estoque');
 
-      // Adiciona no banco de dados
-      const produto = await db.addProdutoFull(nome, desc, recs, pD, pS, pM, pB, link, img, est);
+      // Salva no banco (usa a URL do anexo do Discord como link permanente)
+      const produto = await db.addProdutoFull(nome, desc, recs, pD, pS, pM, pB, arquivo.url, imagem.url, est);
       
-      // Envia automaticamente no canal de loja
       const canalLoja = guild.channels.cache.find(c => c.name === '🗂️・loja');
       if (canalLoja) {
           const { embedLoja, rowLoja } = require('./store');
           const embed = await embedLoja(produto);
           const row = await rowLoja(produto);
           const msg = await canalLoja.send({ embeds: [embed], components: [row] });
-          // Salva o ID da mensagem para futuras edições/deletar
           await db.saveProdutoMsg(produto.id, msg.id, canalLoja.id);
       }
 
-      await logAction(guild, 'ADMIN', `Novo produto **${nome}** adicionado e enviado para a loja.`, user);
-      return interaction.editReply({ content: `✅ Produto **${nome}** adicionado e enviado para a loja!` });
+      await logAction(guild, 'ADMIN', `Produto **${nome}** adicionado por <@${user.id}>`, user);
+      return interaction.editReply({ content: `✅ Produto **${nome}** adicionado com sucesso!` });
     }
 
     if (commandName === 'limpar') {
@@ -75,8 +78,14 @@ async function handleCommand(interaction) {
       return interaction.reply({ content: `✅ ${qtd} mensagens limpas!`, flags: MessageFlags.Ephemeral });
     }
 
+    if (commandName === 'registro-setup') {
+      const { embedRegistro, rowRegistro } = require('./registration');
+      await interaction.channel.send({ embeds: [embedRegistro()], components: [rowRegistro()] });
+      return interaction.reply({ content: '✅ Registro enviado!', flags: MessageFlags.Ephemeral });
+    }
+
   } catch (err) {
-    console.error('[COMMAND ERROR]', err.message);
+    console.error('[COMMAND ERROR]', err);
     if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({ content: `❌ Erro: ${err.message}`, flags: MessageFlags.Ephemeral });
     } else {

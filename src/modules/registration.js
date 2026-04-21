@@ -21,13 +21,15 @@ function embedRegistro() {
 }
 
 function rowRegistro() {
-    return new ActionRowBuilder().addComponents(
+    // IMPORTANTE: Retorna a ActionRow com o botão
+    const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId('btn_registro_verificar')
             .setLabel('Registrar')
             .setEmoji('✅')
             .setStyle(ButtonStyle.Success)
     );
+    return row;
 }
 
 async function handleRegistro(interaction) {
@@ -40,8 +42,6 @@ async function handleRegistro(interaction) {
     try {
         if (roleMembro) {
             await member.roles.add(roleMembro);
-        } else {
-            console.error(`[REGISTRO] Cargo '${ROLE_MEMBRO_NAME}' não encontrado.`);
         }
 
         if (roleVisitante) {
@@ -49,10 +49,10 @@ async function handleRegistro(interaction) {
         }
 
         await interaction.reply({ content: '✅ Registro concluído com sucesso! Agora você é um **Membro**.', ephemeral: true });
-        await logAction(guild, 'REGISTRO', `Usuário <@${user.id}> se registrou com sucesso.`, user);
+        await logAction(guild, 'REGISTRO', `Usuário <@${user.id}> se registrou.`, user);
     } catch (e) {
         console.error('[REGISTRO ERROR]', e.message);
-        await interaction.reply({ content: '❌ Erro ao processar seu registro. Contate um administrador.', ephemeral: true });
+        await interaction.reply({ content: '❌ Erro no registro. Fale com um ADM.', ephemeral: true });
     }
 }
 
