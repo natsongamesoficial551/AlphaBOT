@@ -690,4 +690,239 @@ async function handleAuthModal(interaction) {
   return false;
 }
 
-module.exports = { handleAuthButton, handleAuthModal, embedAuthPayload, AUTH_CHANNEL_ID, hashPassword, gerarAuthKey };
+// ── Modal de Registro Pós-Pagamento ───────────────────────────────────────
+function modalRegistroPosPagamento(pedidoId) {
+  const modal = new ModalBuilder()
+    .setCustomId(`modal_auth_registro_pos_${pedidoId}`)
+    .setTitle('🚀 Criar sua Conta');
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('auth_username')
+        .setLabel('Usuário (para login no software)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('Ex: joaosilva (sem espaços)')
+        .setMinLength(3).setMaxLength(32).setRequired(true)
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('auth_password')
+        .setLabel('Senha')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('Mínimo 6 caracteres')
+        .setMinLength(6).setMaxLength(64).setRequired(true)
+    ),
+  );
+
+  return modal;
+}
+
+// ── Handler: submit do modal de registro pós-pagamento ────────────────────────
+async function handleModalAuthRegistroPos(interaction, pedidoId) {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const username = interaction.fields.getTextInputValue('auth_username').trim();
+  const password = interaction.fields.getTextInputValue('auth_password').trim();
+
+  // Validação de username
+  if (!/^[a-zA-Z0-9_.-]{3,32}$/.test(username)) {
+    return interaction.editReply({
+      embeds: [new EmbedBuilder().setColor(0xE74C3C).setDescription(
+        '❌ Usuário inválido! Use apenas letras, números, `_` ou `.` (3–32 caracteres, sem espaços).'
+      )],
+    });
+  }
+
+  const usernameEmUso = await db.getAuthUserByUsername(username);
+  if (usernameEmUso) {
+    return interaction.editReply({
+      embeds: [new EmbedBuilder().setColor(0xE74C3C).setDescription(
+        '❌ Este nome de usuário já está em uso. Escolha outro.'
+      )],
+    });
+  }
+
+  // Verifica se já tem conta (Se tiver, vamos apenas renovar o tempo)
+  const userExistente = await db.getAuthUserByDiscord(interaction.user.id);
+
+  // Recupera a solicitação/pedido para pegar a expiração
+  // Buscamos a mais recente com status 'pago_aguardando_registro'
+  const req = await db.getAsync(`SELECT * FROM auth_requests WHERE discord_id = ? AND status = 'pago_aguardando_registro' ORDER BY id DESC`, [interaction.user.id]);
+  
+  if (!req) {
+    // Log para depuração
+    console.log(`[AUTH-REG-ERROR] Nenhuma solicitação 'pago_aguardando_registro' encontrada para Discord ID: ${interaction.user.id}`);
+    
+    // Verifica se existe alguma solicitação com outro status
+    const debugReq = await db.getAsync(`SELECT status FROM auth_requests WHERE discord_id = ? ORDER BY id DESC`, [interaction.user.id]);
+    if (debugReq) {
+        console.log(`[AUTH-REG-DEBUG] Encontrada solicitação para o usuário com status: ${debugReq.status}`);
+    }
+
+    return interaction.editReply({
+      embeds: [new EmbedBuilder().setColor(0xE74C3C).setDescription('❌ Não encontrei um pagamento pendente de registro para você. Verifique se o pagamento foi confirmado ou se você já criou sua conta.')],
+    });
+  }
+
+  // Determina expiração baseada no plano salvo na solicitação
+  let expiryIso = null;
+  let labelPlano = "Permanente";
+  const planoNome = req.nome_completo || ""; // Usamos nome_completo para salvar o nome do plano temporariamente
+
+  // Calcula os dias a serem adicionados
+  let diasAdicionar = 0;
+  if (planoNome.includes('24 Horas') || planoNome.includes('Diário')) {
+    diasAdicionar = 1; labelPlano = "24 Horas";
+  } else if (planoNome.includes('7 Dias') || planoNome.includes('Semanal')) {
+    diasAdicionar = 7; labelPlano = "7 Dias";
+  } else if (planoNome.includes('30 Dias') || planoNome.includes('Mensal')) {
+    diasAdicionar = 30; labelPlano = "30 Dias";
+  } else if (planoNome.includes('60 Dias') || planoNome.includes('Bimestral')) {
+    diasAdicionar = 60; labelPlano = "60 Dias";
+  }
+
+  // Define a data base para expiração
+  let dataBase = new Date();
+  
+  // Se o usuário já existe e ainda tem tempo ativo, somamos a partir da data de expiração atual
+  if (userExistente && userExistente.expiry_adm) {
+      const expAtual = new Date(userExistente.expiry_adm);
+      if (expAtual > dataBase) {
+          dataBase = expAtual; // Começa a somar a partir de quando venceria
+      }
+  }
+
+  if (diasAdicionar > 0) {
+      dataBase.setDate(dataBase.getDate() + diasAdicionar);
+      expiryIso = dataBase.toISOString();
+  }
+
+  const authKey = gerarAuthKey();
+  const passHash = hashPassword(password);
+
+  try {
+    const { getDB } = require('../database');
+    const client = await getDB();
+    
+    if (userExistente) {
+        // RENOVAÇÃO: Apenas atualiza a expiração e o status da solicitação
+        await client.execute({
+            sql: `UPDATE auth_users SET expiry_adm = ? WHERE discord_id = ?`,
+            args: [expiryIso, interaction.user.id]
+        });
+        
+        await db.atualizarStatusSolicitacao(req.id, 'finalizado');
+
+        const expiryDisplay = expiryIso ? new Date(expiryIso).toLocaleString('pt-BR') : '♾️ Permanente';
+
+        await interaction.editReply({
+            embeds: [new EmbedBuilder()
+                .setColor(0x3498DB)
+                .setTitle('🔄 Plano Renovado com Sucesso!')
+                .setDescription(
+                    `Identificamos que você já possui uma conta. Seu tempo foi adicionado!\n\n` +
+                    `**👤 Usuário:** \`${userExistente.username}\`\n` +
+                    `**🔑 Auth ID:**\n` +
+                    `\`\`\`\n${userExistente.auth_key}\n\`\`\`\n` +
+                    `➕ **Tempo Adicionado:** ${labelPlano}\n` +
+                    `📅 **Nova Expiração:** ${expiryDisplay}\n\n` +
+                    `*Seu login e senha permanecem os mesmos.*`
+                )
+                .setFooter({ text: 'Alpha Xit • Renovação Automática' })
+                .setTimestamp()
+            ],
+        });
+
+        // Log para Staff
+        const { logAction } = require('./security');
+        const guild = interaction.client.guilds.cache.get(process.env.GUILD_ID);
+        if (guild) {
+            await logAction(guild, 'VENDA', `Plano Renovado via DM: <@${interaction.user.id}> | User: \`${userExistente.username}\` | Adicionado: ${labelPlano}`, interaction.user);
+        }
+        return;
+    }
+
+    // NOVA CONTA: Insere na auth_users
+    await client.execute({
+      sql: `INSERT INTO auth_users (discord_id, discord_tag, username, password_hash, auth_key, expiry_adm) VALUES (?,?,?,?,?,?)`,
+      args: [interaction.user.id, interaction.user.tag, username, passHash, authKey, expiryIso]
+    });
+
+    // Atualiza status da solicitação
+    await db.atualizarStatusSolicitacao(req.id, 'finalizado');
+
+    // Cargo de Membro
+    try {
+      const guild = interaction.client.guilds.cache.get(process.env.GUILD_ID);
+      if (guild) {
+        const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+        if (member) {
+          const roleId = '1484718784668373073';
+          const role = guild.roles.cache.get(roleId);
+          if (role) await member.roles.add(role).catch(() => {});
+        }
+      }
+    } catch (e) {}
+
+    const expiryDisplay = expiryIso ? new Date(expiryIso).toLocaleString('pt-BR') : '♾️ Permanente';
+
+    await interaction.editReply({
+      embeds: [new EmbedBuilder()
+        .setColor(0x2ECC71)
+        .setTitle('✅ Conta Criada com Sucesso!')
+        .setDescription(
+          `Sua conta foi configurada e seu **Auth ID** gerado!\n\n` +
+          `**👤 Usuário:** \`${username}\`\n` +
+          `**🔑 Senha:** \`${password}\`\n` +
+          `**🔑 Auth ID:**\n` +
+          `\`\`\`\n${authKey}\n\`\`\`\n` +
+          `⏳ **Duração:** ${labelPlano}\n` +
+          `📅 **Expira em:** ${expiryDisplay}\n\n` +
+          `**Como usar:**\n` +
+          `> 1. Abra o software Alpha Xit\n` +
+          `> 2. Use seu usuário e senha criados agora\n` +
+          `> 3. Insira o **Auth ID** acima quando solicitado\n\n` +
+          `*Guarde esses dados com segurança!*`
+        )
+        .setFooter({ text: 'Alpha Xit • Sistema de Vendas Automático' })
+        .setTimestamp()
+      ],
+    });
+
+    // Log para Staff
+    const { logAction } = require('./security');
+    const guild = interaction.client.guilds.cache.get(process.env.GUILD_ID);
+    if (guild) {
+        await logAction(guild, 'VENDA', `Conta criada via DM: <@${interaction.user.id}> | User: \`${username}\` | Plano: ${labelPlano}`, interaction.user);
+    }
+
+  } catch (error) {
+    console.error('[REGISTRO-DM-ERROR]', error);
+    await interaction.editReply({
+      embeds: [new EmbedBuilder().setColor(0xE74C3C).setDescription('❌ Erro ao salvar sua conta no banco de dados.')],
+    });
+  }
+}
+
+async function handleAuthButton(interaction) {
+  const { customId } = interaction;
+  if (customId === 'btn_auth_solicitar')          return handleBtnAuthSolicitar(interaction);
+  if (customId === 'btn_auth_atualizar')          return handleBtnAuthAtualizar(interaction);
+  if (customId === 'btn_auth_prosseguir_nova_senha') return interaction.showModal(modalNovaSenhaAtualizar());
+  if (customId.startsWith('btn_auth_aprovar_'))   return handleBtnAuthAprovar(interaction, customId.replace('btn_auth_aprovar_', ''));
+  if (customId.startsWith('btn_auth_reprovar_'))  return handleBtnAuthReprovar(interaction, customId.replace('btn_auth_reprovar_', ''));
+  if (customId.startsWith('btn_auth_registrar_dm_')) return interaction.showModal(modalRegistroPosPagamento(customId.replace('btn_auth_registrar_dm_', '')));
+  return false;
+}
+
+async function handleAuthModal(interaction) {
+  if (interaction.customId === 'modal_auth_solicitar')       return handleModalAuthSolicitar(interaction);
+  if (interaction.customId === 'modal_auth_atualizar')       return handleModalAuthAtualizar(interaction);
+  if (interaction.customId === 'modal_auth_nova_senha')      return handleModalAuthNovaSenha(interaction);
+  if (interaction.customId.startsWith('modal_auth_expiry_')) return handleModalAuthExpiry(interaction, interaction.customId.replace('modal_auth_expiry_', ''));
+  if (interaction.customId.startsWith('modal_auth_registro_pos_')) return handleModalAuthRegistroPos(interaction, interaction.customId.replace('modal_auth_registro_pos_', ''));
+  return false;
+}
+
+module.exports = { handleAuthButton, handleAuthModal, embedAuthPayload, AUTH_CHANNEL_ID, hashPassword, gerarAuthKey, modalRegistroPosPagamento, handleModalAuthRegistroPos };

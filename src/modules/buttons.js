@@ -7,6 +7,11 @@ async function handleButton(interaction) {
   const { customId, guild, user, member } = interaction;
   const { checkSecurity, logAction } = require('./security');
 
+  // Roteamento de Auth (pode ser na DM, então verificamos antes da segurança de canais staff)
+  const { handleAuthButton } = require('./myauth');
+  const authHandled = await handleAuthButton(interaction);
+  if (authHandled !== false) return;
+
   if (!(await checkSecurity(interaction))) return;
 
   try {
@@ -95,7 +100,9 @@ async function handleSelectMenu(interaction) {
 }
 
 async function handleModal(interaction) {
-    // Vazio por enquanto
+    const { handleAuthModal } = require('./myauth');
+    const authHandled = await handleAuthModal(interaction);
+    if (authHandled !== false) return;
 }
 
 module.exports = { handleButton, handleSelectMenu, handleModal };

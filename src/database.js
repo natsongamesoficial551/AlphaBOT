@@ -124,7 +124,15 @@ module.exports = {
   // Auth Requests
   getSolicitacao: (dId) => getAsync(`SELECT * FROM auth_requests WHERE discord_id=? AND status='pendente' ORDER BY id DESC`, [dId]),
   getSolicitacaoPorId: (id) => getAsync(`SELECT * FROM auth_requests WHERE id=?`, [id]),
-  criarSolicitacao: (dId, dTag, nome, user, pass) => _exec(`INSERT INTO auth_requests (discord_id, discord_tag, nome_completo, username, password_hash) VALUES (?,?,?,?,?) ON CONFLICT(discord_id) DO UPDATE SET discord_tag=excluded.discord_tag, nome_completo=excluded.nome_completo, username=excluded.username, password_hash=excluded.password_hash, status='pendente'`, [dId, dTag, nome, user, pass]),
+  criarSolicitacao: async (dId, dTag, nome, user, pass, status = 'pendente') => {
+    try {
+      await _exec(`INSERT INTO auth_requests (discord_id, discord_tag, nome_completo, username, password_hash, status) VALUES (?,?,?,?,?,?) ON CONFLICT(discord_id) DO UPDATE SET discord_tag=excluded.discord_tag, nome_completo=excluded.nome_completo, username=excluded.username, password_hash=excluded.password_hash, status=excluded.status`, [dId, dTag, nome, user, pass, status]);
+      return { ok: true };
+    } catch (e) {
+      const req = await getAsync(`SELECT status FROM auth_requests WHERE discord_id = ?`, [dId]);
+      return { ok: false, status: req ? req.status : 'desconhecido' };
+    }
+  },
   aprovarSolicitacao: async (reqId, key) => {
     const req = await getAsync(`SELECT * FROM auth_requests WHERE id=?`, [reqId]);
     if (!req) return false;

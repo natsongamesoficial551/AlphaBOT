@@ -209,7 +209,7 @@ function embedPedidoConfirmado(produto, compradorId) {
     .setTitle('✅ Pagamento Confirmado!')
     .setDescription(
       `Olá <@${compradorId}>! Seu pagamento do produto **${produto.nome}** foi confirmado! 🎉\n\n` +
-      `Seu arquivo será entregue em seguida na DM.`
+      `Siga as instruções enviadas na sua **DM** para criar sua conta e receber seu **Auth ID**.`
     )
     .setTimestamp()
     .setFooter(FOOTER);

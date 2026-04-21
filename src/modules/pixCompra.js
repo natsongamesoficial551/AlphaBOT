@@ -112,77 +112,72 @@ async function _finalizarCompraProduto(client, guild, user, produto, pedidoId) {
 
 async function _finalizarCompraPlano(client, guild, user, plano, pedidoId) {
     const { logAction } = require('./security');
-    const { gerarAuthKey } = require('./myauth');
 
     await db.decrementarEstoque(plano.tipo);
-    const authKey = gerarAuthKey();
 
-    // Calcula expiração baseada no tipo de plano
-    const agora = new Date();
-    let expDate = new Date();
+    // Determina label do plano
     let labelPlano = "Permanente";
-
     const tipoLower = plano.tipo.toLowerCase();
-    if (tipoLower.includes('diario') || tipoLower.includes('diário')) {
-        expDate.setHours(agora.getHours() + 24);
-        labelPlano = "24 Horas";
-    } else if (tipoLower.includes('semanal')) {
-        expDate.setDate(agora.getDate() + 7);
-        labelPlano = "7 Dias";
-    } else if (tipoLower.includes('mensal')) {
-        expDate.setMonth(agora.getMonth() + 1);
-        labelPlano = "30 Dias";
-    } else if (tipoLower.includes('bimestral')) {
-        expDate.setMonth(agora.getMonth() + 2);
-        labelPlano = "60 Dias";
-    } else {
-        expDate = null; // Permanente se não identificar
-    }
+    if (tipoLower.includes('diario') || tipoLower.includes('diário')) labelPlano = "24 Horas";
+    else if (tipoLower.includes('semanal')) labelPlano = "7 Dias";
+    else if (tipoLower.includes('mensal')) labelPlano = "30 Dias";
+    else if (tipoLower.includes('bimestral')) labelPlano = "60 Dias";
 
-    const expiryIso = expDate ? expDate.toISOString() : null;
-    const expiryDisplay = expDate ? expDate.toLocaleString('pt-BR') : '♾️ Permanente';
+    // Cria uma solicitação temporária para guardar o plano pago
+    // Usamos o campo 'nome_completo' para guardar o label do plano temporariamente
+    // Passamos o status explicitamente para o ON CONFLICT atualizar o status caso já exista uma solicitação pendente
+    const resSolicitacao = await db.criarSolicitacao(user.id, user.tag, labelPlano, `pending_${user.id}`, `pass_${user.id}`, 'pago_aguardando_registro');
+    
+    if (!resSolicitacao.ok && resSolicitacao.status !== 'pago_aguardando_registro') {
+        // Se já existir e não estiver no status correto, forçamos a atualização
+        const req = await db.getAsync(`SELECT id FROM auth_requests WHERE discord_id = ?`, [user.id]);
+        if (req) {
+            await db.run(`UPDATE auth_requests SET nome_completo = ?, status = 'pago_aguardando_registro' WHERE id = ?`, [labelPlano, req.id]);
+        }
+    }
+    
+    // Pequeno delay para garantir que o banco processou
+    await new Promise(r => setTimeout(r, 800));
 
     const embed = new EmbedBuilder()
         .setColor(0x2ECC71)
-        .setTitle('✅ Plano Ativado!')
+        .setTitle('✅ Pagamento Confirmado!')
         .setDescription(
             `Seu pagamento do **${plano.tipo}** foi confirmado! 🎉\n\n` +
-            `🔑 **Sua Auth Key:** \`${authKey}\`\n` +
-            `⏳ **Duração:** ${labelPlano}\n` +
-            `📅 **Expira em:** ${expiryDisplay}\n\n` +
-            `📦 **Seu Download:** [Clique aqui para baixar o Software](${plano.link || 'https://google.com'})\n\n` +
             `**Próximo passo:**\n` +
-            `1. Baixe o arquivo acima.\n` +
-            `2. Ao abrir, use a **Auth Key** acima para se registrar.\n` +
-            `3. Crie seu **Usuário e Senha** dentro do próprio software.`
+            `Agora você precisa criar seu **Usuário e Senha** para usar no software.\n\n` +
+            `1️⃣ Clique no botão **"Criar Minha Conta"** abaixo.\n` +
+            `2️⃣ Preencha o usuário e senha desejados.\n` +
+            `3️⃣ O bot gerará sua **Auth Key** na hora!`
         )
-        .addFields({ name: '⚠️ Importante', value: 'Guarde sua Auth Key em local seguro. Ela é única e pessoal.' })
+        .setFooter({ text: 'Alpha Xit • Registro Automático' })
         .setTimestamp();
 
-    // Tenta enviar o arquivo diretamente se for um link do Discord
-    if (plano.link && _isDiscordCDN(plano.link)) {
-        await user.send({ embeds: [embed] });
-        await _enviarArquivoDM(user, plano.tipo, plano.link);
-    } else {
-        await user.send({ embeds: [embed] });
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`btn_auth_registrar_dm_${pedidoId}`)
+            .setLabel('🚀 Criar Minha Conta')
+            .setStyle(ButtonStyle.Success)
+    );
+
+    await user.send({ embeds: [embed], components: [row] });
+
+    // Envia o link do software também
+    if (plano.link) {
+        const embedLink = new EmbedBuilder()
+            .setColor(0x3498DB)
+            .setTitle('📦 Download do Software')
+            .setDescription(`Baixe o software aqui: [Clique para Baixar](${plano.link})`)
+            .setTimestamp();
+        
+        if (_isDiscordCDN(plano.link)) {
+            await _enviarArquivoDM(user, plano.tipo, plano.link);
+        } else {
+            await user.send({ embeds: [embedLink] });
+        }
     }
-    await logAction(guild, 'VENDA', `Plano **${plano.tipo}** (${labelPlano}) vendido para <@${user.id}>. Key: ${authKey}`, user);
-    
-    // Usa a função centralizada do DB que agora tem "ON CONFLICT" para evitar erros
-    await db.criarSolicitacao(user.id, user.tag, `Plano ${labelPlano}`, `key_${authKey}`, 'pending_registration');
-    
-    // Atualiza o status para identificar que foi pago via Pix automático
-    const req = await db.getAsync(`SELECT id FROM auth_requests WHERE discord_id = ?`, [user.id]);
-    if (req) {
-        await db.atualizarStatusSolicitacao(req.id, 'pago_aguardando_registro');
-    }
-    
-    // Se o usuário já tiver uma conta vinculada, atualizamos a expiração dela
-    const contaExistente = await db.getAuthUserByDiscord(user.id);
-    if (contaExistente) {
-        await db.setExpiryAdm(user.id, expiryIso);
-        await user.send(`🔄 **Sua licença existente foi atualizada!** Nova expiração: ${expiryDisplay}`);
-    }
+
+    await logAction(guild, 'VENDA', `Plano **${plano.tipo}** (${labelPlano}) pago por <@${user.id}>. Aguardando registro na DM.`, user);
 }
 
 async function _iniciarPolling(client, guild, user, pedidoId, transacaoId, dmMsg, onConfirm) {

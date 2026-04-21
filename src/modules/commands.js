@@ -19,9 +19,10 @@ const commands = [
     .addNumberOption(o => o.setName('semanal').setDescription('Preço Semanal').setRequired(true))
     .addNumberOption(o => o.setName('mensal').setDescription('Preço Mensal').setRequired(true))
     .addNumberOption(o => o.setName('bimestral').setDescription('Preço Bimestral').setRequired(true))
-    .addAttachmentOption(o => o.setName('arquivo').setDescription('O arquivo do software').setRequired(true))
     .addAttachmentOption(o => o.setName('imagem').setDescription('A imagem do produto').setRequired(true))
-    .addIntegerOption(o => o.setName('estoque').setDescription('Quantidade em estoque').setRequired(true)),
+    .addIntegerOption(o => o.setName('estoque').setDescription('Quantidade em estoque').setRequired(true))
+    .addAttachmentOption(o => o.setName('arquivo').setDescription('Arquivo do software (opcional se usar link)'))
+    .addStringOption(o => o.setName('link_download').setDescription('Link de download (opcional se usar arquivo)')),
 
   new SlashCommandBuilder()
     .setName('limpar')
@@ -67,11 +68,17 @@ async function handleCommand(interaction) {
       const pM = options.getNumber('mensal');
       const pB = options.getNumber('bimestral');
       const arquivo = options.getAttachment('arquivo');
+      const linkDownload = options.getString('link_download');
       const imagem = options.getAttachment('imagem');
       const est = options.getInteger('estoque');
 
-      // Salva no banco (usa a URL do anexo do Discord como link permanente)
-      const produto = await db.addProdutoFull(nome, desc, recs, pD, pS, pM, pB, arquivo.url, imagem.url, est);
+      const linkFinal = linkDownload || (arquivo ? arquivo.url : null);
+      if (!linkFinal) {
+          return interaction.editReply({ content: '❌ Você precisa fornecer um **Arquivo** ou um **Link de Download**!' });
+      }
+
+      // Salva no banco
+      const produto = await db.addProdutoFull(nome, desc, recs, pD, pS, pM, pB, linkFinal, imagem.url, est);;
       
       const canalLoja = guild.channels.cache.find(c => c.name === '🗂️・loja');
       if (canalLoja) {
@@ -98,27 +105,32 @@ async function handleCommand(interaction) {
     }
 
     if (commandName === 'pix-test') {
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        // Removemos o deferReply aqui para evitar o erro "Unknown interaction" se o banco demorar
         const pId = options.getInteger('produto_id');
         const plano = options.getString('plano');
 
         const produto = await db.getProduto(pId);
-        if (!produto) return interaction.editReply({ content: '❌ Produto não encontrado.' });
+        if (!produto) return interaction.reply({ content: '❌ Produto não encontrado.', flags: MessageFlags.Ephemeral });
+
+        // Resposta imediata para evitar timeout do Discord
+        await interaction.reply({ content: `⏳ Iniciando simulação para **${produto.nome}** (${plano})...`, flags: MessageFlags.Ephemeral });
 
         const { _finalizarCompraPlano } = require('./pixCompra');
         
-        // Simula o objeto de plano que o pixCompra espera
         const planoFake = { 
             tipo: `${produto.nome} - ${plano}`, 
             preco: produto[`preco_${plano}`],
-            link: produto.link // Passa o link do arquivo para o teste
+            link: produto.link
         };
         
-        // Simula a aprovação automática
-        await _finalizarCompraPlano(interaction.client, guild, user, planoFake, 999);
-        
-        await logAction(guild, 'ADMIN', `⚠️ TESTE: <@${user.id}> simulou pagamento de **${produto.nome}** (${plano})`, user);
-        return interaction.editReply({ content: `✅ **SIMULAÇÃO CONCLUÍDA!** Verifique sua DM para ver a entrega do plano **${plano}**.` });
+        try {
+            await _finalizarCompraPlano(interaction.client, guild, user, planoFake, 999);
+            await logAction(guild, 'ADMIN', `⚠️ TESTE: <@${user.id}> simulou pagamento de **${produto.nome}** (${plano})`, user);
+            return interaction.editReply({ content: `✅ **SIMULAÇÃO CONCLUÍDA!** Verifique sua DM para criar sua conta do plano **${plano}**.` });
+        } catch (e) {
+            console.error('[PIX-TEST ERROR]', e);
+            return interaction.editReply({ content: `❌ Erro no teste: ${e.message}` });
+        }
     }
 
   } catch (err) {
