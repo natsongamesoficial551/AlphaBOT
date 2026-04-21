@@ -1,41 +1,50 @@
 /**
- * buttons.js — Versão Final Refatorada (Alpha Xit)
+ * buttons.js — Handlers de Interação
  */
-const {
-  PermissionFlagsBits, MessageFlags,
-  EmbedBuilder, AttachmentBuilder,
-} = require('discord.js');
-
 const db = require('../database');
-const { embedLog, embedErro } = require('../embeds');
 
 async function handleButton(interaction) {
-  const { customId, guild, member, user } = interaction;
+  const { customId, guild, user, member } = interaction;
   const { checkSecurity, logAction } = require('./security');
 
-  // Verifica segurança
   if (!(await checkSecurity(interaction))) return;
 
   try {
     // Registro
     if (customId === 'btn_registro_verificar') {
-      const { handleRegistro } = require('./registration');
-      return handleRegistro(interaction);
+        const { handleRegistro } = require('./registration');
+        return await handleRegistro(interaction);
     }
 
-    // Compras automáticas (PIX) - Caso existam botões legados de produtos
-    if (customId.startsWith('btn_comprar_')) {
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      const produtoId = parseInt(customId.replace('btn_comprar_', ''));
-      const produto   = await db.getProduto(produtoId);
-      if (!produto) return interaction.editReply({ embeds: [embedErro('Produto não encontrado.')] });
+    // Aprovação de Pagamento (Dono do Bot)
+    if (customId.startsWith('btn_pix_aprovar_')) {
+        const pedidoId = parseInt(customId.replace('btn_pix_aprovar_', ''));
+        const pedido = await db.getPedido(pedidoId);
+        if (!pedido) return interaction.reply({ content: '❌ Pedido não encontrado.', ephemeral: true });
 
-      const pedidoId = await db.criarPedido(produto.id, produto.nome, user.id, user.username);
-      const { iniciarCompraProdutoPIX } = require('./pixCompra');
-      await iniciarCompraProdutoPIX(interaction.client, guild, user, produto, pedidoId);
-      
-      await interaction.editReply({ content: '✅ Instruções de pagamento enviadas na sua DM!' });
-      await logAction(guild, 'COMPRA', `<@${user.id}> iniciou compra de **${produto.nome}** (#${pedidoId})`, user);
+        await db.confirmarPedido(pedidoId);
+        
+        // Busca o produto para pegar o link e decrementar estoque
+        const produto = await db.getProduto(pedido.produto_id);
+        if (produto) {
+            await db.decrementarEstoque(produto.id);
+            
+            // Tenta enviar o produto na DM do comprador
+            try {
+                const comprador = await interaction.client.users.fetch(pedido.comprador_id);
+                await comprador.send(`✅ Seu pagamento de **${pedido.produto_nome}** foi aprovado!\n📦 **Produto/Link:** ${produto.link}`);
+            } catch (e) {
+                console.error('[ENTREGA ERROR]', e.message);
+            }
+        }
+
+        await interaction.update({ content: `✅ Pedido #${pedidoId} aprovado e entregue!`, components: [] });
+        await logAction(guild, 'COMPRA', `Pedido #${pedidoId} aprovado por <@${user.id}>`, user);
+    }
+
+    if (customId.startsWith('btn_pix_reprovar_')) {
+        const pedidoId = parseInt(customId.replace('btn_pix_reprovar_', ''));
+        await interaction.update({ content: `❌ Pedido #${pedidoId} reprovado.`, components: [] });
     }
 
   } catch (err) {
@@ -58,18 +67,19 @@ async function handleSelectMenu(interaction) {
 
         const produto = await db.getProduto(produtoId);
         if (!produto || produto.estoque <= 0) {
-            return interaction.reply({ content: '❌ Produto sem estoque.', flags: 64 });
+            return interaction.reply({ content: '❌ Produto sem estoque.', ephemeral: true });
         }
 
         const preco = produto[`preco_${planoTipo}`];
         const { iniciarCompraPlanoPIX } = require('./pixCompra');
-        await interaction.deferReply({ flags: 64 });
         
+        // Criar pedido no banco
         const pedidoId = await db.criarPedido(produto.id, `${produto.nome} (${planoTipo})`, user.id, user.username);
         
-        // Simula o objeto plano esperado pelo pixCompra
-        const planoFake = { tipo: `${produto.nome} - ${planoTipo}`, preco: preco, estoque: produto.estoque };
+        // Objeto para o pixCompra
+        const planoFake = { tipo: `${produto.nome} - ${planoTipo}`, preco: preco };
         
+        await interaction.deferReply({ ephemeral: true });
         await iniciarCompraPlanoPIX(interaction.client, guild, user, planoFake, pedidoId);
         
         await interaction.editReply({ content: '✅ Instruções de pagamento enviadas na sua DM!' });
@@ -81,7 +91,7 @@ async function handleSelectMenu(interaction) {
 }
 
 async function handleModal(interaction) {
-  // Mantido para compatibilidade se necessário futuramente
+    // Vazio por enquanto
 }
 
-module.exports = { handleButton, handleModal, handleSelectMenu };
+module.exports = { handleButton, handleSelectMenu, handleModal };

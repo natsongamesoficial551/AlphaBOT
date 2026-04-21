@@ -1,5 +1,5 @@
 /**
- * database.js — Turso (SQLite na nuvem, gratuito)
+ * database.js — Turso (Versão de Compatibilidade Máxima)
  */
 
 let client;
@@ -14,7 +14,7 @@ async function getDB() {
 
   if (url && token) {
     client = createClient({ url, authToken: token });
-    console.log('[DB] ✅ Conectado ao Turso (nuvem persistente)');
+    console.log('[DB] ✅ Conectado ao Turso');
   } else {
     const path = require('path');
     const fs   = require('fs');
@@ -49,54 +49,34 @@ async function getAsync(sql, params = []) {
 }
 
 async function _createTables() {
+  // 1. Garante que as tabelas básicas existam
   const stmts = [
-    `CREATE TABLE IF NOT EXISTS mensagens_fixas (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL,
-      canal_id TEXT NOT NULL, tipo TEXT NOT NULL, message_id TEXT NOT NULL,
-      UNIQUE(guild_id, tipo))`,
-    `CREATE TABLE IF NOT EXISTS membros (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, discord_id TEXT UNIQUE NOT NULL,
-      username TEXT, xit_id TEXT UNIQUE,
-      registrado_em TEXT DEFAULT (datetime('now','localtime')))`,
-    `CREATE TABLE IF NOT EXISTS produtos (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL, descricao TEXT,
-      recursos TEXT, preco_diario REAL DEFAULT 0, preco_semanal REAL DEFAULT 0,
-      preco_mensal REAL DEFAULT 0, preco_bimestral REAL DEFAULT 0,
-      imagem_url TEXT, link TEXT, estoque INTEGER DEFAULT 0,
-      message_id TEXT, canal_id TEXT, ativo INTEGER DEFAULT 1,
-      criado_em TEXT DEFAULT (datetime('now','localtime')))`,
-    `CREATE TABLE IF NOT EXISTS pedidos (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, produto_id INTEGER,
-      produto_nome TEXT, comprador_id TEXT NOT NULL, comprador_nome TEXT,
-      status TEXT DEFAULT 'aguardando', criado_em TEXT DEFAULT (datetime('now','localtime')), confirmado_em TEXT)`,
-    `CREATE TABLE IF NOT EXISTS logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT, tipo TEXT,
-      descricao TEXT, autor_id TEXT,
-      criado_em TEXT DEFAULT (datetime('now','localtime')))`,
-    `CREATE TABLE IF NOT EXISTS auth_users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, discord_id TEXT UNIQUE NOT NULL,
-      discord_tag TEXT, nome_completo TEXT, username TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL, auth_key TEXT UNIQUE NOT NULL, hwid TEXT,
-      ultimo_heartbeat TEXT, expiry_adm TEXT,
-      ativo INTEGER DEFAULT 1, criado_em TEXT DEFAULT (datetime('now','localtime')))`,
-    `CREATE TABLE IF NOT EXISTS auth_requests (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, discord_id TEXT UNIQUE NOT NULL,
-      discord_tag TEXT, nome_completo TEXT NOT NULL, username TEXT NOT NULL,
-      password_hash TEXT NOT NULL, status TEXT DEFAULT 'pendente',
-      criado_em TEXT DEFAULT (datetime('now','localtime')))`,
-    `CREATE TABLE IF NOT EXISTS planos (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tipo TEXT UNIQUE NOT NULL,
-      preco REAL NOT NULL,
-      estoque INTEGER DEFAULT 0,
-      atualizado_em TEXT DEFAULT (datetime('now','localtime')))`,
+    `CREATE TABLE IF NOT EXISTS mensagens_fixas (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT, canal_id TEXT, tipo TEXT, message_id TEXT, UNIQUE(guild_id, tipo))`,
+    `CREATE TABLE IF NOT EXISTS produtos (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL, descricao TEXT, preco TEXT, link TEXT, imagem_url TEXT, ativo INTEGER DEFAULT 1)`,
+    `CREATE TABLE IF NOT EXISTS pedidos (id INTEGER PRIMARY KEY AUTOINCREMENT, produto_id INTEGER, produto_nome TEXT, comprador_id TEXT, comprador_nome TEXT, status TEXT DEFAULT 'aguardando', criado_em TEXT DEFAULT (datetime('now','localtime')))`,
+    `CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT, tipo TEXT, descricao TEXT, autor_id TEXT, criado_em TEXT DEFAULT (datetime('now','localtime')))`,
+    `CREATE TABLE IF NOT EXISTS auth_users (id INTEGER PRIMARY KEY AUTOINCREMENT, discord_id TEXT UNIQUE, discord_tag TEXT, username TEXT UNIQUE, password_hash TEXT, auth_key TEXT UNIQUE, hwid TEXT, expiry_adm TEXT, ativo INTEGER DEFAULT 1)`,
+    `CREATE TABLE IF NOT EXISTS auth_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, discord_id TEXT UNIQUE, username TEXT, password_hash TEXT, status TEXT DEFAULT 'pendente')`
   ];
-  for (const sql of stmts) {
-    await client.execute({ sql, args: [] });
+  for (const sql of stmts) { await client.execute({ sql, args: [] }); }
+
+  // 2. Migrations Seguras (Adiciona colunas se não existirem no seu Turso)
+  const columns = [
+    { table: 'produtos', column: 'recursos', type: 'TEXT' },
+    { table: 'produtos', column: 'preco_diario', type: 'REAL DEFAULT 0' },
+    { table: 'produtos', column: 'preco_semanal', type: 'REAL DEFAULT 0' },
+    { table: 'produtos', column: 'preco_mensal', type: 'REAL DEFAULT 0' },
+    { table: 'produtos', column: 'preco_bimestral', type: 'REAL DEFAULT 0' },
+    { table: 'produtos', column: 'estoque', type: 'INTEGER DEFAULT 0' },
+    { table: 'produtos', column: 'message_id', type: 'TEXT' },
+    { table: 'produtos', column: 'canal_id', type: 'TEXT' }
+  ];
+
+  for (const c of columns) {
+    try { await client.execute({ sql: `ALTER TABLE ${c.table} ADD COLUMN ${c.column} ${c.type}`, args: [] }); } catch (e) { /* Coluna já existe */ }
   }
 }
 
-// ── Exportações ───────────────────────────────────────────────────────────────
 module.exports = {
   getDB, queryAsync, getAsync,
   
@@ -104,7 +84,7 @@ module.exports = {
   getMsgFixa: (g, t) => getAsync(`SELECT * FROM mensagens_fixas WHERE guild_id=? AND tipo=?`, [g, t]),
   saveMsgFixa: (g, c, t, m) => _exec(`INSERT INTO mensagens_fixas (guild_id, canal_id, tipo, message_id) VALUES (?,?,?,?) ON CONFLICT(guild_id, tipo) DO UPDATE SET canal_id=excluded.canal_id, message_id=excluded.message_id`, [g, c, t, m]),
   
-  // Produtos
+  // Produtos (Com compatibilidade total)
   addProdutoFull: async (nome, desc, recs, pD, pS, pM, pB, link, img, est) => {
     const r = await _exec(`INSERT INTO produtos (nome, descricao, recursos, preco_diario, preco_semanal, preco_mensal, preco_bimestral, link, imagem_url, estoque) VALUES (?,?,?,?,?,?,?,?,?,?)`, [nome, desc, recs, pD, pS, pM, pB, link, img, est]);
     return getAsync(`SELECT * FROM produtos WHERE id=?`, [Number(r.lastInsertRowid)]);
@@ -125,9 +105,8 @@ module.exports = {
   // Auth
   getAuthUserByDiscord: (id) => getAsync(`SELECT * FROM auth_users WHERE discord_id=?`, [id]),
   getAuthUserByKey: (k) => getAsync(`SELECT * FROM auth_users WHERE auth_key=?`, [k]),
-  aprovarSolicitacao: (id, key) => _exec(`INSERT INTO auth_users (discord_id, username, password_hash, auth_key) SELECT discord_id, username, password_hash, ? FROM auth_requests WHERE id=?`, [key, id]),
-
-  // Planos (Legado/Suporte)
+  
+  // Planos (Legado)
   getPlanos: () => queryAsync(`SELECT * FROM planos`),
   getPlano: (t) => getAsync(`SELECT * FROM planos WHERE tipo=?`, [t]),
 };
