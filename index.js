@@ -59,31 +59,6 @@ client.once('ready', async () => {
   if (guild) {
     await seedTodosCanais(guild);
     console.log('[SEED] Concluído');
-
-    // Sistema de Registro Automático (Forçado)
-    setTimeout(async () => {
-        try {
-            const { embedRegistro, rowRegistro } = require('./src/modules/registration');
-            const db = require('./src/database');
-            const canalRegistro = guild.channels.cache.find(c => c.name === '🪪・registro' || c.name.includes('registro'));
-            
-            if (canalRegistro) {
-                // Limpa mensagens antigas do bot no canal para não duplicar
-                const msgs = await canalRegistro.messages.fetch({ limit: 50 });
-                const antigas = msgs.filter(m => m.author.id === client.user.id);
-                if (antigas.size > 0) await canalRegistro.bulkDelete(antigas).catch(() => {});
-
-                // Envia a nova mensagem com o botão
-                const msg = await canalRegistro.send({ 
-                    embeds: [embedRegistro()], 
-                    components: [rowRegistro()] 
-                });
-                
-                await db.saveMsgFixa(guild.id, canalRegistro.id, 'registro', msg.id);
-                console.log(`[REGISTRO] ✅ Mensagem enviada com sucesso em ${guild.name}`);
-            }
-        } catch (err) { console.error('[AUTO-REGISTRO ERROR]', err.message); }
-    }, 5000); // Espera 5 segundos para garantir que o bot carregou tudo
   }
 
   startYouTubePoller(client);
@@ -162,14 +137,20 @@ client.on('interactionCreate', async (interaction) => {
 client.on('guildMemberAdd', async (member) => {
     const { logAction } = require('./src/modules/security');
     const { embedBoasVindas } = require('./src/embeds');
+    const { ROLE_VISITANTE_ID } = require('./src/modules/registration');
     
     console.log(`[JOIN] ${member.user.tag} entrou no servidor.`);
     
-    // Cargo Visitante
-    const roleVisitante = member.guild.roles.cache.find(r => r.name === 'Visitante');
-    if (roleVisitante) {
-        await member.roles.add(roleVisitante).catch(e => console.error('[ROLE] Erro ao dar cargo visitante:', e.message));
-    }
+    // Cargo Visitante (ID fornecido pelo usuário)
+    try {
+        const roleVisitante = member.guild.roles.cache.get(ROLE_VISITANTE_ID);
+        if (roleVisitante) {
+            await member.roles.add(roleVisitante);
+            console.log(`[ROLE] Cargo Visitante dado para ${member.user.tag}`);
+        } else {
+            console.warn(`[ROLE] Cargo Visitante (${ROLE_VISITANTE_ID}) não encontrado.`);
+        }
+    } catch (e) { console.error('[ROLE] Erro ao dar cargo visitante:', e.message); }
 
     // Boas-vindas
     const canalBoasVindas = member.guild.channels.cache.find(c => c.name === '👋・boas-vindas');

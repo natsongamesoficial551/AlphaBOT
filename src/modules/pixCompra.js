@@ -1,5 +1,5 @@
 /**
- * pixCompra.js — Versão FINAL (copyPaste e qrCodeBase64)
+ * pixCompra.js — Versão ULTRA DEFINITIVA (Funções Globais)
  */
 const {
     EmbedBuilder, AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags
@@ -8,6 +8,38 @@ const {
 const db        = require('../database');
 const { embedPedidoConfirmado, embedEntregaProduto, embedErro } = require('../embeds');
 const { criarTransacao, aguardarPagamento, reaisParaCentavos } = require('./promisse');
+
+// --- FUNÇÕES UTILITÁRIAS (DEFINIDAS NO TOPO PARA EVITAR ERROS) ---
+
+function _isDiscordCDN(url) {
+    return url && (typeof url === 'string') && (url.includes('cdn.discordapp.com') || url.includes('media.discordapp.net'));
+}
+
+async function _enviarArquivoDM(user, nome, link, thumb) {
+    try {
+        const embed = new EmbedBuilder()
+            .setColor(0x2ECC71)
+            .setTitle(`📦 Entrega: ${nome}`)
+            .setDescription(`Aqui está o seu arquivo! Clique no botão acima ou baixe o anexo abaixo.`)
+            .setTimestamp();
+        
+        if (thumb) embed.setThumbnail(thumb);
+
+        const attachment = new AttachmentBuilder(link);
+        await user.send({ embeds: [embed], files: [attachment] });
+    } catch (e) {
+        console.error('[DM FILE ERROR]', e.message);
+        await user.send(`📦 **Seu arquivo (${nome}):** ${link}\n*(Não consegui enviar o arquivo direto, use o link acima)*`);
+    }
+}
+
+function _extrairValorNumerico(precoStr) {
+    if (!precoStr) return '0.00';
+    const limpo = String(precoStr).replace(/[^\d,.]/g, '').replace(',', '.');
+    return parseFloat(limpo).toFixed(2);
+}
+
+// ----------------------------------------------------------------
 
 const _pollingAtivo = new Map();
 
@@ -73,7 +105,6 @@ async function _finalizarCompraProduto(client, guild, user, produto, pedidoId) {
     const linkProduto  = produtoAtual?.link || produto.link;
 
     if (linkProduto) {
-        const { _isDiscordCDN, _enviarArquivoDM } = require('./buttons');
         if (_isDiscordCDN(linkProduto)) await _enviarArquivoDM(user, produto.nome, linkProduto, produtoAtual?.imagem_url);
         else await user.send({ embeds: [embedEntregaProduto({ nome: produto.nome, link: linkProduto })] });
     }
@@ -86,37 +117,72 @@ async function _finalizarCompraPlano(client, guild, user, plano, pedidoId) {
     await db.decrementarEstoque(plano.tipo);
     const authKey = gerarAuthKey();
 
-    // Cria solicitação aprovada automaticamente para o usuário criar login
-    // Mas antes, vamos enviar a chave e as instruções
+    // Calcula expiração baseada no tipo de plano
+    const agora = new Date();
+    let expDate = new Date();
+    let labelPlano = "Permanente";
+
+    const tipoLower = plano.tipo.toLowerCase();
+    if (tipoLower.includes('diario') || tipoLower.includes('diário')) {
+        expDate.setHours(agora.getHours() + 24);
+        labelPlano = "24 Horas";
+    } else if (tipoLower.includes('semanal')) {
+        expDate.setDate(agora.getDate() + 7);
+        labelPlano = "7 Dias";
+    } else if (tipoLower.includes('mensal')) {
+        expDate.setMonth(agora.getMonth() + 1);
+        labelPlano = "30 Dias";
+    } else if (tipoLower.includes('bimestral')) {
+        expDate.setMonth(agora.getMonth() + 2);
+        labelPlano = "60 Dias";
+    } else {
+        expDate = null; // Permanente se não identificar
+    }
+
+    const expiryIso = expDate ? expDate.toISOString() : null;
+    const expiryDisplay = expDate ? expDate.toLocaleString('pt-BR') : '♾️ Permanente';
+
     const embed = new EmbedBuilder()
         .setColor(0x2ECC71)
         .setTitle('✅ Plano Ativado!')
         .setDescription(
-            `Seu pagamento do **Plano ${plano.tipo}** foi confirmado! 🎉\n\n` +
-            `🔑 **Sua Auth Key:** \`${authKey}\`\n\n` +
+            `Seu pagamento do **${plano.tipo}** foi confirmado! 🎉\n\n` +
+            `🔑 **Sua Auth Key:** \`${authKey}\`\n` +
+            `⏳ **Duração:** ${labelPlano}\n` +
+            `📅 **Expira em:** ${expiryDisplay}\n\n` +
+            `📦 **Seu Download:** [Clique aqui para baixar o Software](${plano.link || 'https://google.com'})\n\n` +
             `**Próximo passo:**\n` +
-            `Escaneie o QR-Code abaixo ou clique no link para criar seu **Usuário e Senha** de acesso ao software.`
+            `1. Baixe o arquivo acima.\n` +
+            `2. Ao abrir, use a **Auth Key** acima para se registrar.\n` +
+            `3. Crie seu **Usuário e Senha** dentro do próprio software.`
         )
         .addFields({ name: '⚠️ Importante', value: 'Guarde sua Auth Key em local seguro. Ela é única e pessoal.' })
         .setTimestamp();
 
-    // Gerar QR Code para o registro (link para um formulário ou instrução de comando)
-    // Como o usuário quer QR Code, vamos simular um link de registro
-    const registerUrl = `https://alphaxit.com/register?key=${authKey}&discord=${user.id}`;
+    // Tenta enviar o arquivo diretamente se for um link do Discord
+    if (plano.link && _isDiscordCDN(plano.link)) {
+        await user.send({ embeds: [embed] });
+        await _enviarArquivoDM(user, plano.tipo, plano.link);
+    } else {
+        await user.send({ embeds: [embed] });
+    }
+    await logAction(guild, 'VENDA', `Plano **${plano.tipo}** (${labelPlano}) vendido para <@${user.id}>. Key: ${authKey}`, user);
     
-    const qrcode = require('qrcode');
-    const qrBuffer = await qrcode.toBuffer(registerUrl);
-    const attachment = new AttachmentBuilder(qrBuffer, { name: 'registro_qrcode.png' });
-    embed.setImage('attachment://registro_qrcode.png');
-
-    await user.send({ embeds: [embed], files: [attachment] });
-    await logAction(guild, 'VENDA', `Plano **${plano.tipo}** vendido para <@${user.id}>. Key: ${authKey}`, user);
+    // Usa a função centralizada do DB que agora tem "ON CONFLICT" para evitar erros
+    await db.criarSolicitacao(user.id, user.tag, `Plano ${labelPlano}`, `key_${authKey}`, 'pending_registration');
     
-    // O sistema de login authApi.js precisa que o usuário exista em auth_users.
-    // Como ele ainda vai criar o user/pass, podemos salvar a key em uma tabela temporária 
-    // ou usar o sistema de auth_requests já existente marcando como "pago_pendente_registro"
-    await db.run(`INSERT INTO auth_requests (discord_id, discord_tag, nome_completo, username, password_hash, status) VALUES (?,?,?,?,?,?)`, 
-        [user.id, user.tag, 'Cliente Pago', `key_${authKey}`, 'pending_registration', 'pago_aguardando_registro']);
+    // Atualiza o status para identificar que foi pago via Pix automático
+    const req = await db.getAsync(`SELECT id FROM auth_requests WHERE discord_id = ?`, [user.id]);
+    if (req) {
+        await db.atualizarStatusSolicitacao(req.id, 'pago_aguardando_registro');
+    }
+    
+    // Se o usuário já tiver uma conta vinculada, atualizamos a expiração dela
+    const contaExistente = await db.getAuthUserByDiscord(user.id);
+    if (contaExistente) {
+        await db.setExpiryAdm(user.id, expiryIso);
+        await user.send(`🔄 **Sua licença existente foi atualizada!** Nova expiração: ${expiryDisplay}`);
+    }
 }
 
 async function _iniciarPolling(client, guild, user, pedidoId, transacaoId, dmMsg, onConfirm) {
@@ -159,12 +225,6 @@ async function _iniciarPolling(client, guild, user, pedidoId, transacaoId, dmMsg
     }
 }
 
-function _extrairValorNumerico(precoStr) {
-    if (!precoStr) return '0.00';
-    const limpo = String(precoStr).replace(/[^\d,.]/g, '').replace(',', '.');
-    return parseFloat(limpo).toFixed(2);
-}
-
 // Stubs para manter compatibilidade
 async function abrirFormularioCompra(i) { i.reply({ content: 'Clique no botão de compra para receber o Pix na DM.', flags: 64 }); }
 async function processarFormularioCompra(i) {}
@@ -175,4 +235,4 @@ async function processarReprovacao(i) {
     i.reply({ content: `Pedido #${id} cancelado.`, flags: 64 });
 }
 
-module.exports = { iniciarCompraProdutoPIX, iniciarCompraPlanoPIX, abrirFormularioCompra, processarFormularioCompra, processarAprovacao, processarReprovacao };
+module.exports = { iniciarCompraProdutoPIX, iniciarCompraPlanoPIX, abrirFormularioCompra, processarFormularioCompra, processarAprovacao, processarReprovacao, _finalizarCompraPlano };

@@ -586,8 +586,8 @@ async function handleModalAuthExpiry(interaction, reqId) {
     if (guild) {
       const member = await guild.members.fetch(req.discord_id).catch(() => null);
       if (member) {
-        const roleId = '1484718784668373073';
-        const role = guild.roles.cache.get(roleId);
+        const { ROLE_MEMBRO_ID } = require('./registration');
+        const role = guild.roles.cache.get(ROLE_MEMBRO_ID);
         if (role) {
           await member.roles.add(role).catch(e => console.error('[ROLE-ADD]', e.message));
         }

@@ -1,5 +1,5 @@
 /**
- * commands.js — Versão Definitiva (Anexos e Loja Auto)
+ * commands.js — Versão Definitiva (Com /pix-test)
  */
 const {
   SlashCommandBuilder, PermissionFlagsBits,
@@ -33,6 +33,20 @@ const commands = [
     .setName('registro-setup')
     .setDescription('Força o envio da mensagem de registro')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+  new SlashCommandBuilder()
+    .setName('pix-test')
+    .setDescription('Simula um pagamento aprovado (Apenas para Testes)')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addIntegerOption(o => o.setName('produto_id').setDescription('ID do Produto').setRequired(true))
+    .addStringOption(o => o.setName('plano').setDescription('Tipo do Plano').setRequired(true)
+        .addChoices(
+            { name: 'Diário', value: 'diario' },
+            { name: 'Semanal', value: 'semanal' },
+            { name: 'Mensal', value: 'mensal' },
+            { name: 'Bimestral', value: 'bimestral' }
+        )
+    ),
 ];
 
 async function handleCommand(interaction) {
@@ -61,10 +75,9 @@ async function handleCommand(interaction) {
       
       const canalLoja = guild.channels.cache.find(c => c.name === '🗂️・loja');
       if (canalLoja) {
-          const { embedLoja, rowLoja } = require('./store');
-          const embed = await embedLoja(produto);
-          const row = await rowLoja(produto);
-          const msg = await canalLoja.send({ embeds: [embed], components: [row] });
+          const { embedLoja } = require('./store');
+          const result = await embedLoja(produto);
+          const msg = await canalLoja.send({ embeds: [result.embed], components: [result.row] });
           await db.saveProdutoMsg(produto.id, msg.id, canalLoja.id);
       }
 
@@ -82,6 +95,30 @@ async function handleCommand(interaction) {
       const { embedRegistro, rowRegistro } = require('./registration');
       await interaction.channel.send({ embeds: [embedRegistro()], components: [rowRegistro()] });
       return interaction.reply({ content: '✅ Registro enviado!', flags: MessageFlags.Ephemeral });
+    }
+
+    if (commandName === 'pix-test') {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const pId = options.getInteger('produto_id');
+        const plano = options.getString('plano');
+
+        const produto = await db.getProduto(pId);
+        if (!produto) return interaction.editReply({ content: '❌ Produto não encontrado.' });
+
+        const { _finalizarCompraPlano } = require('./pixCompra');
+        
+        // Simula o objeto de plano que o pixCompra espera
+        const planoFake = { 
+            tipo: `${produto.nome} - ${plano}`, 
+            preco: produto[`preco_${plano}`],
+            link: produto.link // Passa o link do arquivo para o teste
+        };
+        
+        // Simula a aprovação automática
+        await _finalizarCompraPlano(interaction.client, guild, user, planoFake, 999);
+        
+        await logAction(guild, 'ADMIN', `⚠️ TESTE: <@${user.id}> simulou pagamento de **${produto.nome}** (${plano})`, user);
+        return interaction.editReply({ content: `✅ **SIMULAÇÃO CONCLUÍDA!** Verifique sua DM para ver a entrega do plano **${plano}**.` });
     }
 
   } catch (err) {

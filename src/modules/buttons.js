@@ -77,7 +77,11 @@ async function handleSelectMenu(interaction) {
         const pedidoId = await db.criarPedido(produto.id, `${produto.nome} (${planoTipo})`, user.id, user.username);
         
         // Objeto para o pixCompra
-        const planoFake = { tipo: `${produto.nome} - ${planoTipo}`, preco: preco };
+        const planoFake = { 
+            tipo: `${produto.nome} - ${planoTipo}`, 
+            preco: preco,
+            link: produto.link // Passa o link do arquivo para a entrega real
+        };
         
         await interaction.deferReply({ ephemeral: true });
         await iniciarCompraPlanoPIX(interaction.client, guild, user, planoFake, pedidoId);

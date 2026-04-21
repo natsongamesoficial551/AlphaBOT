@@ -4,41 +4,49 @@
 const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 
 async function embedLoja(produto) {
+    // Se não houver produto (chamada do seeder sem dados), retorna uma embed genérica
+    if (!produto) {
+        const embed = new EmbedBuilder()
+            .setColor(0x00FF00)
+            .setTitle('🛒 Loja Alpha Xit')
+            .setDescription('Navegue pelos nossos canais de produtos para ver as ofertas disponíveis!')
+            .setFooter({ text: 'Alpha Xit • Qualidade e Segurança' });
+        return { embed, row: null };
+    }
+
     const embed = new EmbedBuilder()
         .setColor(0x00FF00)
         .setTitle(`📦 ${produto.nome}`)
-        .setDescription(produto.descricao)
+        .setDescription(produto.descricao || 'Sem descrição')
         .addFields(
-            { name: '🚀 Recursos', value: produto.recursos.split(',').map(r => `• ${r.trim()}`).join('\n'), inline: false },
+            { name: '🚀 Recursos', value: produto.recursos ? produto.recursos.split(',').map(r => `• ${r.trim()}`).join('\n') : 'Padrão', inline: false },
             { name: '💳 Planos e Preços', value: 
-                `📅 **Diário:** R$ ${produto.preco_diario.toFixed(2).replace('.', ',')}\n` +
-                `📅 **Semanal:** R$ ${produto.preco_semanal.toFixed(2).replace('.', ',')}\n` +
-                `📅 **Mensal:** R$ ${produto.preco_mensal.toFixed(2).replace('.', ',')}\n` +
-                `📅 **Bimestral:** R$ ${produto.preco_bimestral.toFixed(2).replace('.', ',')}`, 
+                `📅 **Diário:** R$ ${(produto.preco_diario || 0).toFixed(2).replace('.', ',')}\n` +
+                `📅 **Semanal:** R$ ${(produto.preco_semanal || 0).toFixed(2).replace('.', ',')}\n` +
+                `📅 **Mensal:** R$ ${(produto.preco_mensal || 0).toFixed(2).replace('.', ',')}\n` +
+                `📅 **Bimestral:** R$ ${(produto.preco_bimestral || 0).toFixed(2).replace('.', ',')}`, 
               inline: false 
             },
-            { name: '📦 Estoque', value: `\`${produto.estoque}\` unidades disponíveis`, inline: true }
+            { name: '📦 Estoque', value: `\`${produto.estoque || 0}\` unidades disponíveis`, inline: true }
         )
-        .setImage(produto.imagem_url)
+        .setImage(produto.imagem_url || null)
         .setFooter({ text: 'Alpha Xit • Selecione um plano abaixo para comprar' });
 
-    return embed;
-}
-
-async function rowLoja(produto) {
     const menu = new StringSelectMenuBuilder()
         .setCustomId(`menu_compra_${produto.id}`)
         .setPlaceholder('Selecione o plano desejado...')
         .addOptions([
-            { label: 'Plano Diário', value: `compra_${produto.id}_diario`, description: `R$ ${produto.preco_diario.toFixed(2)}`, emoji: '⚡' },
-            { label: 'Plano Semanal', value: `compra_${produto.id}_semanal`, description: `R$ ${produto.preco_semanal.toFixed(2)}`, emoji: '📅' },
-            { label: 'Plano Mensal', value: `compra_${produto.id}_mensal`, description: `R$ ${produto.preco_mensal.toFixed(2)}`, emoji: '🗓️' },
-            { label: 'Plano Bimestral', value: `compra_${produto.id}_bimestral`, description: `R$ ${produto.preco_bimestral.toFixed(2)}`, emoji: '💎' }
+            { label: 'Plano Diário', value: `compra_${produto.id}_diario`, description: `R$ ${(produto.preco_diario || 0).toFixed(2)}`, emoji: '⚡' },
+            { label: 'Plano Semanal', value: `compra_${produto.id}_semanal`, description: `R$ ${(produto.preco_semanal || 0).toFixed(2)}`, emoji: '📅' },
+            { label: 'Plano Mensal', value: `compra_${produto.id}_mensal`, description: `R$ ${(produto.preco_mensal || 0).toFixed(2)}`, emoji: '🗓️' },
+            { label: 'Plano Bimestral', value: `compra_${produto.id}_bimestral`, description: `R$ ${(produto.preco_bimestral || 0).toFixed(2)}`, emoji: '💎' }
         ]);
 
-    if (produto.estoque <= 0) menu.setDisabled(true).setPlaceholder('Produto sem estoque');
+    if ((produto.estoque || 0) <= 0) menu.setDisabled(true).setPlaceholder('Produto sem estoque');
 
-    return new ActionRowBuilder().addComponents(menu);
+    const row = new ActionRowBuilder().addComponents(menu);
+
+    return { embed, row };
 }
 
-module.exports = { embedLoja, rowLoja };
+module.exports = { embedLoja };

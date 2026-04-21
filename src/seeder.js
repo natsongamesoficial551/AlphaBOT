@@ -27,7 +27,7 @@ async function findChannel(guild, nome) {
 }
 
 async function _enviar(canal, buildFn) {
-  const payload = buildFn();
+  const payload = await buildFn();
   if (payload && payload.embed && payload.row) return canal.send({ embeds: [payload.embed], components: [payload.row] });
   if (payload && payload.embed)                return canal.send({ embeds: [payload.embed] });
   if (payload)                                 return canal.send({ embeds: [payload] });
@@ -35,23 +35,32 @@ async function _enviar(canal, buildFn) {
 
 async function seedCanal(guild, tipo, channelName, buildFn) {
   const canal = await findChannel(guild, channelName);
-  if (!canal) return;
+  if (!canal) {
+    console.warn(`[SEED] ⚠️ Canal ${channelName} não encontrado para ${tipo}`);
+    return;
+  }
 
   const existing = await db.getMsgFixa(guild.id, tipo);
   if (existing) {
     try {
+      console.log(`[SEED] Verificando ${tipo} (ID: ${existing.message_id})...`);
       await canal.messages.fetch(existing.message_id);
-      console.log(`[SEED] ✓ ${tipo} já existe — skip`);
+      console.log(`[SEED] ✓ ${tipo} já existe e está acessível — skip`);
       return;
-    } catch {
+    } catch (e) {
+      console.log(`[SEED] ↻ ${tipo} (ID: ${existing.message_id}) não encontrado no Discord (${e.message}). Limpando banco e reenviando...`);
       await db.deleteMsgFixa(guild.id, tipo);
-      console.log(`[SEED] ↻ ${tipo} sumiu, reenviando...`);
     }
   }
 
+  console.log(`[SEED] Enviando nova mensagem de ${tipo} em #${channelName}...`);
   const msg = await _enviar(canal, buildFn);
-  await db.saveMsgFixa(guild.id, canal.id, tipo, msg.id);
-  console.log(`[SEED] ✅ ${tipo} enviado (${msg.id})`);
+  if (msg && msg.id) {
+    await db.saveMsgFixa(guild.id, canal.id, tipo, msg.id);
+    console.log(`[SEED] ✅ ${tipo} enviado e salvo no banco (ID: ${msg.id})`);
+  } else {
+    console.error(`[SEED] ❌ Falha ao enviar mensagem de ${tipo}`);
+  }
 }
 
 async function seedCanalById(guild, tipo, canalId, buildFn) {
@@ -83,7 +92,9 @@ async function seedTodosCanais(guild) {
   await seedCanal(guild, 'boas-vindas',  CANAL_NOMES['boas-vindas'],  () => embedBoasVindas());
   await seedCanal(guild, 'regras',       CANAL_NOMES['regras'],       () => embedRegras());
   await seedCanal(guild, 'registro',     CANAL_NOMES['registro'],     () => embedRegistro());
-  await seedCanal(guild, 'loja',         CANAL_NOMES['loja'],         () => embedLoja());
+  
+  // Para a loja, como embedLoja é async, precisamos lidar com isso no buildFn
+  await seedCanal(guild, 'loja', CANAL_NOMES['loja'], async () => await embedLoja());
   
   console.log(`[SEED] ✅ Seed concluído!`);
 }
