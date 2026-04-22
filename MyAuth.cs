@@ -286,7 +286,7 @@ namespace MyAuth
         {
             try
             {
-                string raw = $"ALPHAXITHWID|{GetCpuId()}|{GetMacAddress()}";
+                string raw = $"ALPHAXITHWID|{GetMotherboardSerial()}|{GetDiskSerial()}|{GetCpuId()}|{GetMacAddress()}";
                 using (var sha = SHA256.Create())
                 {
                     var b = sha.ComputeHash(Encoding.UTF8.GetBytes(raw));
@@ -297,7 +297,7 @@ namespace MyAuth
             }
             catch
             {
-                string raw = $"ALPHAXITHWID_FB|{Environment.MachineName}|{Environment.UserName}";
+                string raw = $"ALPHAXITHWID_FB|{Environment.MachineName}|{Environment.UserName}|{GetMotherboardSerial()}|{GetDiskSerial()}";
                 using (var sha = SHA256.Create())
                 {
                     var b = sha.ComputeHash(Encoding.UTF8.GetBytes(raw));
@@ -306,6 +306,30 @@ namespace MyAuth
                     return sb.ToString();
                 }
             }
+        }
+
+        private static string GetMotherboardSerial()
+        {
+            try
+            {
+                using (var s = new ManagementObjectSearcher("SELECT SerialNumber FROM Win32_BaseBoard"))
+                    foreach (ManagementObject o in s.Get())
+                    { var serial = o["SerialNumber"]?.ToString(); if (!string.IsNullOrWhiteSpace(serial)) return serial.Trim(); }
+            }
+            catch { }
+            return "NOMBS";
+        }
+
+        private static string GetDiskSerial()
+        {
+            try
+            {
+                using (var s = new ManagementObjectSearcher("SELECT SerialNumber FROM Win32_DiskDrive WHERE InterfaceType=\'IDE\' OR InterfaceType=\'SCSI\' OR InterfaceType=\'USB\' OR InterfaceType=\'SATA\'"))
+                    foreach (ManagementObject o in s.Get())
+                    { var serial = o["SerialNumber"]?.ToString(); if (!string.IsNullOrWhiteSpace(serial)) return serial.Trim(); }
+            }
+            catch { }
+            return "NODS";
         }
 
         private static string GetCpuId()
