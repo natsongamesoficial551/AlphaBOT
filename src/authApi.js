@@ -135,15 +135,17 @@ async function handleAuthRequest(req, res) {
     if (user.expiry_adm && new Date(user.expiry_adm) < new Date())
       return jsonResponse(res, 403, { success: false, message: 'Licença expirada. Fale com o staff.' });
 
-    // HWID
+    // HWID (MODO FLEXÍVEL: Apenas registra o último hardware, sem bloquear)
     if (hwid) {
       const hwidClean = String(hwid).trim().slice(0, 256);
-      // Se o HWID no banco estiver vazio ou for a string "NULL", vincula o novo HWID automaticamente
-      if (!user.hwid || user.hwid === 'NULL' || user.hwid === '') {
+      if (user.hwid !== hwidClean) {
+        // Se mudou o hardware, apenas atualizamos no banco e registramos o log
         await db.vincularHwid(authKeyClean, hwidClean);
-      } else if (user.hwid !== hwidClean) {
-        _dmHwidAlerta(user, hwidClean);
-        return jsonResponse(res, 403, { success: false, message: 'Auth ID vinculado a outro computador. Fale com o staff.' });
+        const dbConn = await db.getDB();
+        await dbConn.execute({ 
+          sql: `INSERT INTO auth_logs (username, acao) VALUES (?,?)`, 
+          args: [user.username, `Troca de Hardware detectada: ${hwidClean.slice(0, 16)}...`] 
+        });
       }
     }
 

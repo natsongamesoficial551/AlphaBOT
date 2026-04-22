@@ -286,7 +286,9 @@ namespace MyAuth
         {
             try
             {
-                string raw = $"ALPHAXITHWID|{GetMotherboardSerial()}|{GetDiskSerial()}|{GetCpuId()}|{GetMacAddress()}";
+                // Versão simplificada e estável: Placa-mãe + CPU ID
+                // Isso é suficiente para identificar o PC sem ser sensível a rede/VPN
+                string raw = $"ALPHA_V3|{GetMotherboardSerial()}|{GetCpuId()}";
                 using (var sha = SHA256.Create())
                 {
                     var b = sha.ComputeHash(Encoding.UTF8.GetBytes(raw));
@@ -297,14 +299,7 @@ namespace MyAuth
             }
             catch
             {
-                string raw = $"ALPHAXITHWID_FB|{Environment.MachineName}|{Environment.UserName}|{GetMotherboardSerial()}|{GetDiskSerial()}";
-                using (var sha = SHA256.Create())
-                {
-                    var b = sha.ComputeHash(Encoding.UTF8.GetBytes(raw));
-                    var sb = new StringBuilder();
-                    foreach (var x in b) sb.AppendFormat("{0:x2}", x);
-                    return sb.ToString();
-                }
+                return "FALLBACK_" + Environment.MachineName;
             }
         }
 
