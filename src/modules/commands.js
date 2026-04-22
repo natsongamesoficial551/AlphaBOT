@@ -48,6 +48,11 @@ const commands = [
             { name: 'Bimestral', value: 'bimestral' }
         )
     ),
+  new SlashCommandBuilder()
+    .setName('hwid-reset')
+    .setDescription('Reseta o HWID de um usuário para permitir login em outro PC')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addUserOption(o => o.setName('usuario').setDescription('O usuário para resetar o HWID').setRequired(true)),
 ];
 
 async function handleCommand(interaction) {
@@ -131,6 +136,32 @@ async function handleCommand(interaction) {
             console.error('[PIX-TEST ERROR]', e);
             return interaction.editReply({ content: `❌ Erro no teste: ${e.message}` });
         }
+    }
+
+    if (commandName === 'hwid-reset') {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const targetUser = options.getUser('usuario');
+        
+        const conta = await db.getAuthUserByDiscord(targetUser.id);
+        if (!conta) {
+            return interaction.editReply({ content: `❌ O usuário <@${targetUser.id}> não possui um Auth ID vinculado.` });
+        }
+
+        await db.run(`UPDATE auth_users SET hwid = NULL WHERE discord_id = ?`, [targetUser.id]);
+        await logAction(guild, 'ADMIN', `HWID do usuário <@${targetUser.id}> foi resetado por <@${user.id}>`, user);
+        
+        try {
+            await targetUser.send({
+                embeds: [new EmbedBuilder()
+                    .setColor(0x3498DB)
+                    .setTitle('🔄 HWID Resetado')
+                    .setDescription('Seu **HWID** foi resetado pelo staff. Agora você pode logar novamente no seu PC ou em um novo computador.')
+                    .setFooter({ text: 'Alpha Xit Auth' })
+                    .setTimestamp()]
+            });
+        } catch (e) {}
+
+        return interaction.editReply({ content: `✅ HWID do usuário **${targetUser.tag}** resetado com sucesso!` });
     }
 
   } catch (err) {

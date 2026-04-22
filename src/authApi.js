@@ -138,7 +138,8 @@ async function handleAuthRequest(req, res) {
     // HWID
     if (hwid) {
       const hwidClean = String(hwid).trim().slice(0, 256);
-      if (!user.hwid) {
+      // Se o HWID no banco estiver vazio ou for a string "NULL", vincula o novo HWID automaticamente
+      if (!user.hwid || user.hwid === 'NULL' || user.hwid === '') {
         await db.vincularHwid(authKeyClean, hwidClean);
       } else if (user.hwid !== hwidClean) {
         _dmHwidAlerta(user, hwidClean);
